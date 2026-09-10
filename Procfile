@@ -1,1 +1,1 @@
-web: python bot_command.py & python bot_academic.py & python bot_nexus.py & python bot_archive.py
+web: python bot_academic.py
