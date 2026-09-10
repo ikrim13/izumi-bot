@@ -14,9 +14,11 @@ def load_data():
     if os.path.exists(STORAGE_FILE):
         try:
             with open(STORAGE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
+                content = f.read()
+                if content.strip():
+                    return json.loads(content)
+        except Exception as e:
+            logging.error(f"Gagal load data: {e}")
     return {
         "archive": {},
         "notified_logs": [],
@@ -35,9 +37,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗂️ **[Archive Bot All-In-One] Aktif!**\n\n"
         "📌 **Perintah Arsip:**\n"
         "• `/archive <Matkul> | <Catatan>` : Simpan teks\n"
-        "• Kirim file + caption `/archive <Matkul> | <Catat>` : Simpan berkas\n"
+        "• Kirim file + caption `/archive <Matkul> | <Catatan>` : Simpan berkas\n"
         "• `/archive` : Lihat semua daftar arsip\n"
-        "• `/search <Kata Kunci>` : Cari arsip berdasarkan matkul/catatan\n\n"
+        "• `/search <Kata Kunci>` : Cari arsip\n\n"
         "🗑️ **Perintah Hapus:**\n"
         "• `/delitem <Matkul> | <Nomor>` : Hapus arsip satuan\n"
         "• `/delmatkul <Matkul>` : Hapus 1 matkul penuh\n"
@@ -94,10 +96,7 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def search_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = " ".join(context.args).strip().lower()
     if not query:
-        await update.message.reply_text(
-            "⚠️ Masukkan kata kunci pencarian!\n"
-            "Contoh: `/search Pemrograman` atau `/search database`"
-        )
+        await update.message.reply_text("⚠️ Masukkan kata kunci pencarian!\nContoh: `/search iseng`")
         return
 
     data = load_data()
@@ -108,7 +107,6 @@ async def search_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     found_results = []
     for matkul, catatan_list in archives.items():
-        # Cek apakah query cocok dengan nama matkul atau ada di dalam catatan
         matched_items = []
         for idx, item in enumerate(catatan_list, 1):
             if query in matkul.lower() or query in item.lower():
@@ -138,7 +136,7 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
 
     raw_content = caption.replace("/archive", "", 1).strip()
     if not raw_content:
-        await update.message.reply_text("⚠️ Format salah! Contoh: `/archive Pemrograman | Modul praktikum 1`")
+        await update.message.reply_text("⚠️ Format salah! Contoh: `/archive iseng | Foto kucing`")
         return
 
     if "|" in raw_content:
@@ -185,11 +183,7 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
 async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_args = " ".join(context.args)
     if "|" not in text_args:
-        await update.message.reply_text(
-            "⚠️ Format salah!\n\n"
-            "Gunakan format:\n`/delitem <Matkul> | <Nomor>`\n"
-            "*(Contoh: `/delitem Pemrograman | 1`)*"
-        )
+        await update.message.reply_text("⚠️ Format salah! Gunakan: `/delitem <Matkul> | <Nomor>`")
         return
 
     parts = text_args.split("|", 1)
@@ -197,23 +191,21 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     idx_str = parts[1].strip()
 
     if not idx_str.isdigit():
-        await update.message.reply_text("⚠️ Nomor arsip harus berupa angka! Contoh: `/delitem Pemrograman | 1`")
+        await update.message.reply_text("⚠️ Nomor arsip harus berupa angka!")
         return
 
     idx = int(idx_str) - 1
-
     data = load_data()
     if "archive" not in data or matkul not in data["archive"]:
-        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan di arsip.")
+        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan.")
         return
 
     items = data["archive"][matkul]
     if idx < 0 or idx >= len(items):
-        await update.message.reply_text(f"❌ Nomor arsip tidak valid! Mata kuliah **{matkul}** hanya memiliki {len(items)} item.")
+        await update.message.reply_text(f"❌ Nomor arsip tidak valid!")
         return
 
     removed_item = items.pop(idx)
-    
     if not items:
         del data["archive"][matkul]
 
@@ -223,12 +215,12 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def delete_matkul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matkul = " ".join(context.args).strip()
     if not matkul:
-        await update.message.reply_text("⚠️ Masukkan nama mata kuliah yang mau dihapus!\nContoh: `/delmatkul Pemrograman`")
+        await update.message.reply_text("⚠️ Masukkan nama mata kuliah!\nContoh: `/delmatkul iseng`")
         return
 
     data = load_data()
     if "archive" not in data or matkul not in data["archive"]:
-        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan di arsip.")
+        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan.")
         return
 
     del data["archive"][matkul]
@@ -256,7 +248,7 @@ def main():
     app.add_handler(CommandHandler("cleararchive", clear_archive))
     app.add_handler(MessageHandler(filters.ATTACHMENT | filters.PHOTO | filters.VIDEO | filters.AUDIO, archive_media_handler))
 
-    print("Archive Bot All-In-One (with Search & Delete) sedang berjalan...")
+    print("Archive Bot All-In-One (Fixed Storage) sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
