@@ -54,13 +54,18 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    data = load_data()
-    schedules = data.get("schedules", {})
-    text = "📅 **Jadwal Kuliah & Ruangan:**\n"
-    for hari, items in schedules.items():
-        text += f"\n• **{hari}**:\n"
-        for item in items:
-            text += f"  - {item['matkul']} | ⏰ {item['jam']} | 🚪 {item['ruang']}\n"
+    await update.message.reply_text("🔄 Sedang mengambil jadwal dan kegiatan dari Kalender...")
+    events = fetch_calendar_events()
+    
+    if not events:
+        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan ditemukan di kalender.")
+        return
+
+    text = "📅 **Jadwal & Kegiatan Kalender Terkini:**\n"
+    for i, (title, dt) in enumerate(events[:15], 1):
+        formatted_date = dt.strftime("%d %b %Y, %H:%M")
+        text += f"\n{i}. **{title}**\n   ⏰ {formatted_date}"
+        
     await update.message.reply_text(text)
 
 async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
