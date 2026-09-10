@@ -9,7 +9,7 @@ from telegram.ext import Application, CommandHandler, ContextTypes
 
 ACADEMIC_TOKEN = os.getenv("IZUMI_ACADEMIC_TOKEN")
 TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID")
-ICAL_URL = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?userid=5325&authtoken=16e794057ce3844f51ea241e4fe35032993933db&preset_what=all&preset_time=custom"
+ICAL_URL = os.getenv("ICAL_URL")
 
 logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
