@@ -37,7 +37,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗂️ **[Archive Bot All-In-One] Aktif!**\n\n"
         "📌 **Perintah Arsip:**\n"
         "• `/archive <Matkul> | <Catatan>` : Simpan teks\n"
-        "• Kirim file + caption `/archive <Matkul> | <Catatan>` : Simpan berkas\n"
+        "• Kirim file/foto + caption `/archive <Matkul> | <Catatan>` : Simpan berkas + kirim balik\n"
         "• `/archive` : Lihat semua daftar arsip\n"
         "• `/search <Kata Kunci>` : Cari arsip\n\n"
         "🗑️ **Perintah Hapus:**\n"
@@ -61,8 +61,12 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         msg = "📚 **Daftar Arsip & Berkas Kuliah:**\n"
         for matkul, catatan_list in archives.items():
             msg += f"\n📖 **{matkul}**:\n"
-            for idx, item in enumerate(catatan_list, 1):
-                msg += f"  {idx}. {item}\n"
+            for idx, entry in enumerate(catatan_list, 1):
+                # Tangani format lama (string) vs format baru (dictionary)
+                if isinstance(entry, dict):
+                    msg += f"  {idx}. [1 File/Media] {entry.get('note', '')}\n"
+                else:
+                    msg += f"  {idx}. {entry}\n"
         await update.message.reply_text(msg)
         return
 
@@ -84,11 +88,17 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if matkul not in data["archive"]:
         data["archive"][matkul] = []
 
-    data["archive"][matkul].append(catatan)
+    # Simpan sebagai dictionary untuk teks murni
+    entry_data = {
+        "type": "text",
+        "note": catatan
+    }
+
+    data["archive"][matkul].append(entry_data)
     save_data(data)
 
     await update.message.reply_text(
-        f"✅ **Arsip Disimpan!**\n\n"
+        f"✅ **Arsip Teks Disimpan!**\n\n"
         f"📖 Matkul: **{matkul}**\n"
         f"📝 Keterangan: {catatan}"
     )
@@ -108,9 +118,10 @@ async def search_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
     found_results = []
     for matkul, catatan_list in archives.items():
         matched_items = []
-        for idx, item in enumerate(catatan_list, 1):
-            if query in matkul.lower() or query in item.lower():
-                matched_items.append((idx, item))
+        for idx, entry in enumerate(catatan_list, 1):
+            note_text = entry.get("note", "") if isinstance(entry, dict) else str(entry)
+            if query in matkul.lower() or query in note_text.lower():
+                matched_items.append((idx, entry))
         
         if matched_items or query in matkul.lower():
             found_results.append((matkul, matched_items if matched_items else list(enumerate(catatan_list, 1))))
@@ -119,13 +130,33 @@ async def search_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🔍 Tidak ditemukan arsip dengan kata kunci: **{query}**")
         return
 
-    msg = f"🔎 **Hasil Pencarian untuk:** `{query}`\n"
     for matkul, items in found_results:
-        msg += f"\n📖 **{matkul}**:\n"
-        for idx, item in items:
-            msg += f"  {idx}. {item}\n"
-
-    await update.message.reply_text(msg)
+        msg = f"🔎 **Hasil untuk Matkul: {matkul}**\n"
+        await update.message.reply_text(msg)
+        
+        for idx, entry in items:
+            if isinstance(entry, dict) and entry.get("type") != "text":
+                file_type = entry.get("type")
+                file_id = entry.get("file_id")
+                caption_text = f"[{matkul} - #{idx}] {entry.get('note', '')}"
+                
+                try:
+                    if file_type == "photo":
+                        await update.message.reply_photo(photo=file_id, caption=caption_text)
+                    elif file_type == "document":
+                        await update.message.reply_document(document=file_id, caption=caption_text)
+                    elif file_type == "video":
+                        await update.message.reply_video(video=file_id, caption=caption_text)
+                    elif file_type == "audio":
+                        await update.message.reply_audio(audio=file_id, caption=caption_text)
+                    else:
+                        await update.message.reply_text(f"{idx}. {entry.get('note', '')}")
+                except Exception as e:
+                    logging.error(f"Gagal kirim ulang file: {e}")
+                    await update.message.reply_text(f"{idx}. [File gagal dimuat] - {entry.get('note', '')}")
+            else:
+                note_content = entry.get("note", "") if isinstance(entry, dict) else str(entry)
+                await update.message.reply_text(f"📝 {idx}. (Teks) {note_content}")
 
 async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -154,31 +185,55 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if matkul not in data["archive"]:
         data["archive"][matkul] = []
 
+    file_type = ""
+    file_id = ""
     file_label = ""
+
     if message.document:
+        file_type = "document"
+        file_id = message.document.file_id
         file_label = f"📁 Dokumen ({message.document.file_name})"
     elif message.photo:
+        file_type = "photo"
+        # Ambil resolusi foto tertinggi
+        file_id = message.photo[-1].file_id
         file_label = "🖼️ [Foto/Gambar]"
     elif message.video:
+        file_type = "video"
+        file_id = message.video.file_id
         file_label = "🎥 [Video]"
     elif message.audio:
+        file_type = "audio"
+        file_id = message.audio.file_id
         file_label = "🎵 [Audio]"
     else:
+        file_type = "text"
         file_label = "📎 [Berkas Media]"
 
-    if custom_note:
-        final_entry = f"{file_label} - {custom_note}"
-    else:
-        final_entry = file_label
+    full_note = f"{file_label} - {custom_note}" if custom_note else file_label
 
-    data["archive"][matkul].append(final_entry)
+    entry_data = {
+        "type": file_type,
+        "file_id": file_id,
+        "note": full_note
+    }
+
+    data["archive"][matkul].append(entry_data)
     save_data(data)
 
-    await message.reply_text(
-        f"✅ **Berkas Masuk Arsip!**\n\n"
-        f"📖 Matkul: **{matkul}**\n"
-        f"📌 Keterangan: {final_entry}"
-    )
+    # Kirim konfirmasi sekaligus kirim balik file/foto aslinya ke chat
+    confirmation_text = f"✅ **Berkas Masuk Arsip & Dikirim Balik!**\n\n📖 Matkul: **{matkul}**\n📌 Keterangan: {full_note}"
+    
+    if file_type == "photo":
+        await message.reply_photo(photo=file_id, caption=confirmation_text)
+    elif file_type == "document":
+        await message.reply_document(document=file_id, caption=confirmation_text)
+    elif file_type == "video":
+        await message.reply_video(video=file_id, caption=confirmation_text)
+    elif file_type == "audio":
+        await message.reply_audio(audio=file_id, caption=confirmation_text)
+    else:
+        await message.reply_text(confirmation_text)
 
 async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_args = " ".join(context.args)
@@ -206,11 +261,13 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     removed_item = items.pop(idx)
+    note_val = removed_item.get("note", "") if isinstance(removed_item, dict) else str(removed_item)
+
     if not items:
         del data["archive"][matkul]
 
     save_data(data)
-    await update.message.reply_text(f"🗑️ Berhasil menghapus arsip nomor {idx_str} dari **{matkul}**:\n`{removed_item}`")
+    await update.message.reply_text(f"🗑️ Berhasil menghapus arsip nomor {idx_str} dari **{matkul}**:\n`{note_val}`")
 
 async def delete_matkul(update: Update, context: ContextTypes.DEFAULT_TYPE):
     matkul = " ".join(context.args).strip()
@@ -248,7 +305,7 @@ def main():
     app.add_handler(CommandHandler("cleararchive", clear_archive))
     app.add_handler(MessageHandler(filters.ATTACHMENT | filters.PHOTO | filters.VIDEO | filters.AUDIO, archive_media_handler))
 
-    print("Archive Bot All-In-One (Fixed Storage) sedang berjalan...")
+    print("Archive Bot All-In-One (Media Sendback) sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
