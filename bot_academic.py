@@ -227,7 +227,7 @@ def main():
     
     job_queue = app.job_queue
     # Kirim jadwal harian jam 07:00 pagi
-    job_queue.run_daily(job_daily_schedule, time=datetime.strptime("07:00", "%H:%M").time())
+    job_queue.run_daily(job_daily_schedule, time=time(hour=7, minute=0))
     # Cek pengingat kelas setiap 5 menit (300 detik)
     job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
     # Cek deadline e-learning setiap 5 menit (300 detik)
