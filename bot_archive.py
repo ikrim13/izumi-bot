@@ -115,7 +115,7 @@ def main():
     app.add_handler(CommandHandler("archive", list_archive))
     
     # Handler pesan dengan media (foto/dokumen) ber-caption
-   app.add_handler(MessageHandler(filters.PHOTO | filters.DOCUMENT, handle_media))
+  app.add_handler(MessageHandler(filters.photo | filters.document, handle_media))
     
     print("Archive Bot sedang berjalan...")
     app.run_polling()
