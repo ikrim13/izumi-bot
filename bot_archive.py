@@ -33,10 +33,14 @@ def save_data(data):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🗂️ **[Archive Bot All-In-One] Aktif!**\n\n"
-        "Cara pakai:\n"
-        "1. **Teks**: `/archive <Matkul> | <Catatan>`\n"
-        "2. **File + Catatan**: Kirim file dengan caption `/archive <Matkul> | <Catatan Tambahan>`\n"
-        "3. **Lihat Arsip**: Ketik `/archive` saja."
+        "📌 **Perintah Arsip:**\n"
+        "• `/archive <Matkul> | <Catatan>` : Simpan teks\n"
+        "• Kirim file + caption `/archive <Matkul> | <Catat>` : Simpan berkas\n"
+        "• `/archive` : Lihat semua daftar arsip\n\n"
+        "🗑️ **Perintah Hapus:**\n"
+        "• `/delitem <Matkul> | <Nomor>` : Hapus arsip satuan berdasarkan nomor\n"
+        "• `/delmatkul <Matkul>` : Hapus 1 matkul beserta isinya\n"
+        "• `/cleararchive` : Hapus seluruh arsip"
     )
 
 async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -81,9 +85,9 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     save_data(data)
 
     await update.message.reply_text(
-        f"✅ **Arsip Teks Disimpan!**\n\n"
+        f"✅ **Arsip Disimpan!**\n\n"
         f"📖 Matkul: **{matkul}**\n"
-        f"📝 Catatan: {catatan}"
+        f"📝 Keterangan: {catatan}"
     )
 
 async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,13 +97,11 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if not caption.startswith("/archive"):
         return
 
-    # Hilangkan prefix /archive
     raw_content = caption.replace("/archive", "", 1).strip()
     if not raw_content:
         await update.message.reply_text("⚠️ Format salah! Contoh: `/archive Pemrograman | Modul praktikum 1`")
         return
 
-    # Pisahkan matkul dan catatan tambahan jika menggunakan tanda |
     if "|" in raw_content:
         parts = raw_content.split("|", 1)
         matkul = parts[0].strip()
@@ -115,7 +117,6 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
     if matkul not in data["archive"]:
         data["archive"][matkul] = []
 
-    # Identifikasi jenis file
     file_label = ""
     if message.document:
         file_label = f"📁 Dokumen ({message.document.file_name})"
@@ -128,7 +129,6 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         file_label = "📎 [Berkas Media]"
 
-    # Gabungkan info file dan catatan teksnya
     if custom_note:
         final_entry = f"{file_label} - {custom_note}"
     else:
@@ -138,10 +138,73 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
     save_data(data)
 
     await message.reply_text(
-        f"✅ **Berkas & Catatan Berhasil Masuk Arsip!**\n\n"
+        f"✅ **Berkas Masuk Arsip!**\n\n"
         f"📖 Matkul: **{matkul}**\n"
         f"📌 Keterangan: {final_entry}"
     )
+
+# --- FITUR PENGHAPUSAN ARSIP ---
+
+async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_args = " ".join(context.args)
+    if "|" not in text_args:
+        await update.message.reply_text(
+            "⚠️ Format salah!\n\n"
+            "Gunakan format:\n`/delitem <Matkul> | <Nomor>`\n"
+            "*(Contoh: `/delitem Pemrograman | 1`)*\n\n"
+            "Cek nomor urut dengan mengetik `/archive`."
+        )
+        return
+
+    parts = text_args.split("|", 1)
+    matkul = parts[0].strip()
+    idx_str = parts[1].strip()
+
+    if not idx_str.isdigit():
+        await update.message.reply_text("⚠️ Nomor arsip harus berupa angka! Contoh: `/delitem Pemrograman | 1`")
+        return
+
+    idx = int(idx_str) - 1 # Indeks list python mulai dari 0
+
+    data = load_data()
+    if "archive" not in data or matkul not in data["archive"]:
+        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan di arsip.")
+        return
+
+    items = data["archive"][matkul]
+    if idx < 0 or idx >= len(items):
+        await update.message.reply_text(f"❌ Nomor arsip tidak valid! Mata kuliah **{matkul}** hanya memiliki {len(items)} item.")
+        return
+
+    removed_item = items.pop(idx)
+    
+    # Jika list matkul jadi kosong, hapus key matkul-nya
+    if not items:
+        del data["archive"][matkul]
+
+    save_data(data)
+    await update.message.reply_text(f"🗑️ Berhasil menghapus arsip nomor {idx_str} dari **{matkul}**:\n`{removed_item}`")
+
+async def delete_matkul(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    matkul = " ".join(context.args).strip()
+    if not matkul:
+        await update.message.reply_text("⚠️ Masukkan nama mata kuliah yang mau dihapus!\nContoh: `/delmatkul Pemrograman`")
+        return
+
+    data = load_data()
+    if "archive" not in data or matkul not in data["archive"]:
+        await update.message.reply_text(f"❌ Mata kuliah **{matkul}** tidak ditemukan di arsip.")
+        return
+
+    del data["archive"][matkul]
+    save_data(data)
+    await update.message.reply_text(f"🗑️ Seluruh arsip untuk mata kuliah **{matkul}** berhasil dihapus!")
+
+async def clear_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    data = load_data()
+    data["archive"] = {}
+    save_data(data)
+    await update.message.reply_text("🗑️ Seluruh arsip dan berkas berhasil dikosongkan!")
 
 def main():
     if not ARCHIVE_TOKEN:
@@ -152,9 +215,12 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("archive", archive_command))
+    app.add_handler(CommandHandler("delitem", delete_item))
+    app.add_handler(CommandHandler("delmatkul", delete_matkul))
+    app.add_handler(CommandHandler("cleararchive", clear_archive))
     app.add_handler(MessageHandler(filters.ATTACHMENT | filters.PHOTO | filters.VIDEO | filters.AUDIO, archive_media_handler))
 
-    print("Archive Bot All-In-One (with Media & Notes) sedang berjalan...")
+    print("Archive Bot All-In-One (with Delete Features) sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
