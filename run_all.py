@@ -1,51 +1,41 @@
-import subprocess
-import sys
 import os
-import threading
+import sys
 import time
+import threading
 
-# Daftar bot dan token env yang harus dicek
-bots_config = [
-    ("bot_academic.py", "IZUMI_ACADEMIC_TOKEN"),
-    ("bot_archive.py", "IZUMI_ARCHIVE_TOKEN"),
-    ("bot_command.py", "CEO_TOKEN"), # Ganti env token command/nexus kalau namanya beda
-    ("bot_nexus.py", "IZUMI_NEXUS_TOKEN")
-]
-
-def run_bot(filename, token_env):
-    token = os.getenv(token_env)
-    if not token:
-        print(f"[WARNING] {filename} dilewati karena token ({token_env}) tidak ditemukan di Environment Variables Railway!")
-        return
-
-    print(f"[STARTING] Menjalankan {filename} menggunakan token {token_env}...")
-    env = os.environ.copy()
-    env["PYTHONUNBUFFERED"] = "1"
+def start_bot(filename):
+    print(f"Menjalankan {filename}...")
+    # Menggunakan exec untuk menjalankan file bot di dalam thread terpisah
+    with open(filename, 'r', encoding='utf-8') as f:
+        code = f.read()
     
-    process = subprocess.Popen([sys.executable, filename], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=env, text=True)
-    
-    # Meneruskan log dari bot ke console Railway
-    while True:
-        output = process.stdout.readline()
-        if output == '' and process.poll() is not None:
-            break
-        if output:
-            print(f"[{filename}] {output.strip()}")
+    # Membuat namespace lokal/global sendiri untuk tiap bot agar variabelnya tidak bentrok
+    namespace = {'__name__': '__main__', '__file__': filename}
+    try:
+        exec(code, namespace)
+    except Exception as e:
+        print(f"Error pada {filename}: {e}")
 
 if __name__ == "__main__":
-    print("=== Multi-Bot Runner Dimulai ===")
+    bot_files = [
+        "bot_academic.py",
+        "bot_archive.py",
+        "bot_command.py",
+        "bot_nexus.py"
+    ]
+
     threads = []
-    
-    for filename, token_env in bots_config:
-        if os.path.exists(filename):
-            t = threading.Thread(target=run_bot, args=(filename, token_env))
+    for bot in bot_files:
+        if os.path.exists(bot):
+            t = threading.Thread(target=start_bot, args=(bot,))
             t.daemon = True
             t.start()
             threads.append(t)
-            time.sleep(1)
+            time.sleep(2) # Jeda 2 detik antar bot
         else:
-            print(f"[ERROR] File {filename} tidak ditemukan di repository!")
+            print(f"File {bot} tidak ditemukan.")
 
+    # Menjaga proses utama tetap hidup
     try:
         while True:
             time.sleep(1)
