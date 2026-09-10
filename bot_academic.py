@@ -115,15 +115,22 @@ async def minggu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengambil data deadline dari Kalender...")
+    await update.message.reply_text("🔄 Sedang mengambil data deadline tugas dari Kalender...")
     events = fetch_calendar_events()
     
-    if not events:
+    # Filter hanya event yang judulnya mengandung kata kunci tugas/deadline
+    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
+    deadline_events = [
+        (title, dt) for title, dt in events 
+        if any(kw in title.lower() for kw in keywords_tugas)
+    ]
+    
+    if not deadline_events:
         await update.message.reply_text("🎉 Tidak ada deadline tugas aktif saat ini di kalender.")
         return
 
     text = "📝 **Daftar Tugas & Deadline Terdekat:**\n"
-    for i, (title, dt) in enumerate(events[:10], 1):
+    for i, (title, dt) in enumerate(deadline_events[:10], 1):
         formatted_date = dt.strftime("%d %b %Y, %H:%M")
         text += f"\n{i}. **{title}**\n   ⏰ Deadline: {formatted_date}"
         
@@ -197,7 +204,13 @@ async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
     if "notified_classes" not in data:
         data["notified_classes"] = []
 
+    # Jangan ingatkan kegiatan yang judulnya termasuk kategori tugas
+    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
+
     for title, dt in events:
+        if any(kw in title.lower() for kw in keywords_tugas):
+            continue  # Lewati jika ini adalah tugas (biar diurus job_check_deadlines)
+
         diff = dt - now
         total_seconds = diff.total_seconds()
 
@@ -226,12 +239,19 @@ async def job_check_deadlines(context: ContextTypes.DEFAULT_TYPE):
     if not events:
         return
 
+    # Hanya ambil event yang judulnya mengandung kata kunci tugas/deadline
+    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
+    deadline_events = [
+        (title, dt) for title, dt in events 
+        if any(kw in title.lower() for kw in keywords_tugas)
+    ]
+
     now = datetime.now()
     data = load_data()
     if "notified_logs" not in data:
         data["notified_logs"] = []
 
-    for title, dt in events:
+    for title, dt in deadline_events:
         diff = dt - now
         total_seconds = diff.total_seconds()
 
