@@ -23,12 +23,6 @@ def load_data():
         except Exception:
             pass
     return {
-        "schedules": {
-            "Senin": [{"matkul": "Pemrograman Web", "jam": "08:00", "ruang": "Lab Komputer 1"}],
-            "Selasa": [{"matkul": "Basis Data", "jam": "10:00", "ruang": "Kelas 3.2"}],
-            "Rabu": [{"matkul": "Jaringan Komputer", "jam": "13:00", "ruang": "Lab Jaringan"}],
-            "Kamis": [{"matkul": "Sistem Operasi", "jam": "08:00", "ruang": "Kelas 2.1"}]
-        },
         "archive": {},
         "notified_logs": [],
         "notified_classes": []  # Riwayat notifikasi kelas agar tidak spam
@@ -49,7 +43,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Pengingat 30 menit sebelum kuliah mulai (lengkap dengan ruangan)\n"
         "- Pengingat deadline tugas (H-1, 3 jam, 30 menit)\n\n"
         "Perintah manual:\n"
-        "- `/jadwal` : Lihat jadwal kuliah\n"
+        "- `/jadwal` : Lihat jadwal/kegiatan kalender terdekat\n"
+        "- `/besok` : Cek jadwal & kegiatan untuk besok\n"
+        "- `/minggu` : Cek jadwal & kegiatan 7 hari ke depan\n"
         "- `/tugas` : Cek daftar tugas/deadline terbaru"
     )
 
@@ -63,6 +59,59 @@ async def jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = "📅 **Jadwal & Kegiatan Kalender Terkini:**\n"
     for i, (title, dt) in enumerate(events[:15], 1):
+        formatted_date = dt.strftime("%d %b %Y, %H:%M")
+        text += f"\n{i}. **{title}**\n   ⏰ {formatted_date}"
+        
+    await update.message.reply_text(text)
+
+async def besok(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Sedang mengecek jadwal untuk besok...")
+    events = fetch_calendar_events()
+    
+    if not events:
+        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan di kalender.")
+        return
+
+    tomorrow = datetime.now().date() + timedelta(days=1)
+    
+    tomorrow_events = []
+    for title, dt in events:
+        if dt.date() == tomorrow:
+            tomorrow_events.append((title, dt))
+
+    if not tomorrow_events:
+        await update.message.reply_text(f"🎉 Santai! Tidak ada jadwal kuliah atau tugas untuk besok ({tomorrow.strftime('%d %b %Y')}).")
+        return
+
+    text = f"📅 **Jadwal & Kegiatan Besok ({tomorrow.strftime('%d %b %Y')}):**\n"
+    for i, (title, dt) in enumerate(tomorrow_events, 1):
+        formatted_time = dt.strftime("%H:%M")
+        text += f"\n{i}. **{title}**\n   ⏰ Pukul {formatted_time}"
+        
+    await update.message.reply_text(text)
+
+async def minggu(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🔄 Sedang mengambil jadwal dan kegiatan untuk 7 hari ke depan...")
+    events = fetch_calendar_events()
+    
+    if not events:
+        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan ditemukan di kalender.")
+        return
+
+    now = datetime.now()
+    one_week_later = now + timedelta(days=7)
+    
+    week_events = []
+    for title, dt in events:
+        if now <= dt <= one_week_later:
+            week_events.append((title, dt))
+
+    if not week_events:
+        await update.message.reply_text("🎉 Santai! Tidak ada jadwal kuliah atau tugas untuk 7 hari ke depan.")
+        return
+
+    text = "📅 **Jadwal & Kegiatan 7 Hari ke Depan:**\n"
+    for i, (title, dt) in enumerate(week_events, 1):
         formatted_date = dt.strftime("%d %b %Y, %H:%M")
         text += f"\n{i}. **{title}**\n   ⏰ {formatted_date}"
         
@@ -116,16 +165,17 @@ async def job_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     today_en = datetime.now().strftime("%A")
     today_id = days_map.get(today_en, "Senin")
 
-    data = load_data()
-    schedules = data.get("schedules", {})
-    todays_classes = schedules.get(today_id, [])
+    events = fetch_calendar_events()
+    today_date = datetime.now().date()
+    
+    todays_classes = [title for title, dt in events if dt.date() == today_date]
 
-    text = f"☀️ **Selamat Pagi, Kabinet!**\n📅 Jadwal Kuliah Hari Ini (**{today_id}**):\n"
+    text = f"☀️ **Selamat Pagi, Kabinet!**\n📅 Jadwal & Kegiatan Hari Ini (**{today_id}**):\n"
     if todays_classes:
         for c in todays_classes:
-            text += f"• **{c['matkul']}** — ⏰ {c['jam']} | 🚪 {c['ruang']}\n"
+            text += f"• **{c}**\n"
     else:
-        text += "• Tidak ada jadwal kuliah hari ini. Santai dulu bro!\n"
+        text += "• Tidak ada jadwal kuliah atau kegiatan hari ini. Santai dulu bro!\n"
 
     await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=text)
 
@@ -133,48 +183,35 @@ async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
     if not TARGET_GROUP_ID:
         return
 
-    days_map = {"Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu", "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu", "Sunday": "Minggu"}
-    now = datetime.now()
-    today_en = now.strftime("%A")
-    today_id = days_map.get(today_en, "Senin")
+    events = fetch_calendar_events()
+    if not events:
+        return
 
+    now = datetime.now()
     data = load_data()
-    schedules = data.get("schedules", {})
-    todays_classes = schedules.get(today_id, [])
-    
     if "notified_classes" not in data:
         data["notified_classes"] = []
 
-    for c in todays_classes:
-        # Format jam kelas "HH:MM"
-        try:
-            class_time_obj = datetime.strptime(c['jam'], "%H:%M").time()
-            class_datetime = datetime.combine(now.date(), class_time_obj)
-            
-            # Hitung selisih waktu (30 menit = 1800 detik)
-            diff = class_datetime - now
-            total_seconds = diff.total_seconds()
+    for title, dt in events:
+        diff = dt - now
+        total_seconds = diff.total_seconds()
 
-            # Jika mendekati 30 menit sebelum mulai (rentang toleransi 5 menit / 300 detik)
-            if 0 <= total_seconds <= 1800:
-                unique_key = f"{today_id}_{c['matkul']}_{c['jam']}_{now.strftime('%Y%m%d')}"
+        if 0 <= total_seconds <= 1800:
+            unique_key = f"{title}_{dt.strftime('%Y%m%d%H%M')}"
+            
+            if unique_key not in data["notified_classes"]:
+                msg = (
+                    f"🔔 **PENGINGAT KEGIATAN (30 MENIT LAGI)**\n\n"
+                    f"📖 Kegiatan: **{title}**\n"
+                    f"⏰ Waktu: {dt.strftime('%H:%M')}\n\n"
+                    f"Ayo bersiap-siap!"
+                )
+                await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=msg)
                 
-                if unique_key not in data["notified_classes"]:
-                    msg = (
-                        f"🔔 **PENGINGAT KULIAH (30 MENIT LAGI)**\n\n"
-                        f"📖 Mata Kuliah: **{c['matkul']}**\n"
-                        f"⏰ Jam: {c['jam']}\n"
-                        f"🚪 Ruangan: **{c['ruang']}**\n\n"
-                        f"Ayo bersiap-siap menuju kelas!"
-                    )
-                    await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=msg)
-                    
-                    data["notified_classes"].append(unique_key)
-                    if len(data["notified_classes"]) > 50:
-                        data["notified_classes"] = data["notified_classes"][-30:]
-                    save_data(data)
-        except Exception as e:
-            logging.error(f"Error parsing class time: {e}")
+                data["notified_classes"].append(unique_key)
+                if len(data["notified_classes"]) > 50:
+                    data["notified_classes"] = data["notified_classes"][-30:]
+                save_data(data)
 
 async def job_check_deadlines(context: ContextTypes.DEFAULT_TYPE):
     if not TARGET_GROUP_ID:
@@ -228,17 +265,16 @@ def main():
     
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("jadwal", jadwal))
+    app.add_handler(CommandHandler("besok", besok))
+    app.add_handler(CommandHandler("minggu", minggu))
     app.add_handler(CommandHandler("tugas", tugas))
     
     job_queue = app.job_queue
-    # Kirim jadwal harian jam 07:00 pagi
     job_queue.run_daily(job_daily_schedule, time=time(hour=7, minute=0))
-    # Cek pengingat kelas setiap 5 menit (300 detik)
     job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
-    # Cek deadline e-learning setiap 5 menit (300 detik)
     job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
 
-    print("Academic Bot sedang berjalan dengan integrasi E-Learning & Job Automation lengkap...")
+    print("Academic Bot sedang berjalan dengan integrasi Kalender & Job Automation lengkap...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
