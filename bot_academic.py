@@ -118,12 +118,14 @@ async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Sedang mengambil data deadline tugas dari Kalender...")
     events = fetch_calendar_events()
     
-    # Filter hanya event yang judulnya mengandung kata kunci tugas/deadline
-    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
-    deadline_events = [
-        (title, dt) for title, dt in events 
-        if any(kw in title.lower() for kw in keywords_tugas)
-    ]
+    # Hanya ambil yang benar-benar ada kata "deadline" atau "tenggat" di judulnya
+    keywords_deadline = ["deadline", "tenggat", "due date"]
+    
+    deadline_events = []
+    for title, dt in events:
+        t_lower = title.lower()
+        if any(kw in t_lower for kw in keywords_deadline):
+            deadline_events.append((title, dt))
     
     if not deadline_events:
         await update.message.reply_text("🎉 Tidak ada deadline tugas aktif saat ini di kalender.")
@@ -204,12 +206,12 @@ async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
     if "notified_classes" not in data:
         data["notified_classes"] = []
 
-    # Jangan ingatkan kegiatan yang judulnya termasuk kategori tugas
-    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
+    keywords_deadline = ["deadline", "tenggat", "due date"]
 
     for title, dt in events:
-        if any(kw in title.lower() for kw in keywords_tugas):
-            continue  # Lewati jika ini adalah tugas (biar diurus job_check_deadlines)
+        t_lower = title.lower()
+        if any(kw in t_lower for kw in keywords_deadline):
+            continue  # Lewati event deadline di pengingat kelas harian
 
         diff = dt - now
         total_seconds = diff.total_seconds()
@@ -239,12 +241,12 @@ async def job_check_deadlines(context: ContextTypes.DEFAULT_TYPE):
     if not events:
         return
 
-    # Hanya ambil event yang judulnya mengandung kata kunci tugas/deadline
-    keywords_tugas = ["tugas", "deadline", "quiz", "kuis", "uts", "uas", "laporan", "pr", "submission", "tenggat"]
-    deadline_events = [
-        (title, dt) for title, dt in events 
-        if any(kw in title.lower() for kw in keywords_tugas)
-    ]
+    keywords_deadline = ["deadline", "tenggat", "due date"]
+    deadline_events = []
+    for title, dt in events:
+        t_lower = title.lower()
+        if any(kw in t_lower for kw in keywords_deadline):
+            deadline_events.append((title, dt))
 
     now = datetime.now()
     data = load_data()
