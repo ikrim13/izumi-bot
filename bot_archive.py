@@ -31,8 +31,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🗂️ [Archive Bot] Modul arsip aktif.\n"
         "Perintah:\n"
         "- `/archive` : Lihat seluruh daftar arsip\n"
-        "- `/archive <Matkul> | <Catatan>` : Simpan catatan teks\n"
-        "- Kirim foto/dokumen dengan caption: `<Matkul> | <Keterangan>`"
+        "- `/archive <Matkul> | <Catatan>` : Simpan catatan teks"
     )
 
 async def list_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -61,31 +60,22 @@ async def list_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += f"\n• **{matkul}**: {len(items)} item tersimpan"
     await update.message.reply_text(text)
 
-async def handle_media(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    message = update.message
-    caption = message.caption
-    
-    if not caption or "|" not in caption:
-        return
+async def save_text_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text_args = update.message.text
+    if text_args and text_args.startswith("/archive"):
+        parts_cmd = text_args.replace("/archive", "", 1).strip()
+        if "|" in parts_cmd:
+            parts = parts_cmd.split("|", 1)
+            matkul = parts[0].strip().title()
+            catatan = parts[1].strip()
 
-    parts = caption.split("|", 1)
-    matkul = parts[0].strip().title()
-    keterangan = parts[1].strip()
-
-    media_type = "File/Dokumen"
-    if message.photo:
-        media_type = "Foto"
-    elif message.document:
-        media_type = "Dokumen"
-
-    data = load_data()
-    if matkul not in data["archive"]:
-        data["archive"][matkul] = []
-
-    data["archive"][matkul].append(f"📎 [{media_type}] {keterangan}")
-    save_data(data)
-    
-    await message.reply_text(f"📥 Berhasil mengarsipkan {media_type} ke kategori **{matkul}**.")
+            data = load_data()
+            if matkul not in data["archive"]:
+                data["archive"][matkul] = []
+            
+            data["archive"][matkul].append(f"📝 {catatan}")
+            save_data(data)
+            await update.message.reply_text(f"✅ Catatan berhasil disimpan ke arsip **{matkul}**.")
 
 def main():
     if not ARCHIVE_TOKEN:
@@ -94,7 +84,6 @@ def main():
     app = Application.builder().token(ARCHIVE_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("archive", list_archive))
-    app.add_handler(MessageHandler(filters.photo | filters.document, handle_media))
     
     print("Archive Bot sedang berjalan...")
     app.run_polling()
