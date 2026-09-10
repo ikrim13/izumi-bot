@@ -1,1 +1,1 @@
-web: python bot_academic.py
+web: python run_all.py
