@@ -4,6 +4,7 @@ import logging
 import requests
 from icalendar import Calendar
 from datetime import datetime, timedelta, time
+from zoneinfo import ZoneInfo
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
@@ -131,31 +132,30 @@ async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def fetch_calendar_events():
     try:
         response = requests.get(ICAL_URL, timeout=10)
-        logging.info(f"Status Code iCal: {response.status_code}")
-        logging.info(f"Isi iCal (100 karakter awal): {response.text[:100]}")
-        
         if response.status_code != 200:
             return []
 
         cal = Calendar.from_ical(response.content)
         events = []
+        wib_zone = ZoneInfo("Asia/Jakarta")
         
         for component in cal.walk('vevent'):
             summary = component.get('summary')
-            dt = component.get('dtstart') or component.get('dtend')
+            dt_start = component.get('dtstart')
             
-            if summary and dt:
-                date_time = dt.dt
+            if summary and dt_start:
+                date_time = dt_start.dt
                 if isinstance(date_time, datetime):
                     if date_time.tzinfo is not None:
-                        date_time = date_time.astimezone().replace(tzinfo=None)
+                        date_time = date_time.astimezone(wib_zone).replace(tzinfo=None)
+                    else:
+                        date_time = date_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(wib_zone).replace(tzinfo=None)
                     events.append((str(summary), date_time))
                 elif isinstance(date_time, type(datetime.now().date())):
                     date_time = datetime.combine(date_time, time(0, 0))
                     events.append((str(summary), date_time))
                     
         events.sort(key=lambda x: x[1])
-        logging.info(f"Total event yang berhasil diparse: {len(events)}")
         return events
     except Exception as e:
         logging.error(f"Error fetching ical: {e}")
