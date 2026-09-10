@@ -118,7 +118,6 @@ async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("🔄 Sedang mengambil data deadline tugas dari Kalender...")
     events = fetch_calendar_events()
     
-    # Hanya ambil yang benar-benar ada kata "deadline" atau "tenggat" di judulnya
     keywords_deadline = ["deadline", "tenggat", "due date"]
     
     deadline_events = []
@@ -211,7 +210,7 @@ async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
     for title, dt in events:
         t_lower = title.lower()
         if any(kw in t_lower for kw in keywords_deadline):
-            continue  # Lewati event deadline di pengingat kelas harian
+            continue
 
         diff = dt - now
         total_seconds = diff.total_seconds()
@@ -283,11 +282,34 @@ async def job_check_deadlines(context: ContextTypes.DEFAULT_TYPE):
                         data["notified_logs"] = data["notified_logs"][-50:]
                     save_data(data)
 
+# --- AUTO LAUNCH COMPANION BOTS ---
+import threading
+import subprocess
+import sys
+
+def launch_companions():
+    companions = ["bot_archive.py", "bot_command.py", "bot_nexus.py"]
+    for comp in companions:
+        if os.path.exists(comp):
+            def run_script(filename):
+                try:
+                    subprocess.run([sys.executable, filename])
+                except Exception as e:
+                    logging.error(f"Gagal menjalankan {filename}: {e}")
+            
+            t = threading.Thread(target=run_script, args=(comp,))
+            t.daemon = True
+            t.start()
+            logging.info(f"Berhasil mentrigger thread untuk: {comp}")
+
 def main():
     if not ACADEMIC_TOKEN:
         logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan!")
         return
     
+    # Jalankan bot-bot lain di background thread
+    launch_companions()
+
     app = Application.builder().token(ACADEMIC_TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
@@ -301,7 +323,7 @@ def main():
     job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
     job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
 
-    print("Academic Bot sedang berjalan...")
+    print("Academic Bot & Companion Bots sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
