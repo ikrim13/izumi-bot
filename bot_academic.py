@@ -3,7 +3,7 @@ import json
 import logging
 import requests
 from icalendar import Calendar
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, time
 from telegram import Update
 from telegram.ext import Application, CommandHandler, ContextTypes
 
