@@ -36,10 +36,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📌 **Perintah Arsip:**\n"
         "• `/archive <Matkul> | <Catatan>` : Simpan teks\n"
         "• Kirim file + caption `/archive <Matkul> | <Catat>` : Simpan berkas\n"
-        "• `/archive` : Lihat semua daftar arsip\n\n"
+        "• `/archive` : Lihat semua daftar arsip\n"
+        "• `/search <Kata Kunci>` : Cari arsip berdasarkan matkul/catatan\n\n"
         "🗑️ **Perintah Hapus:**\n"
-        "• `/delitem <Matkul> | <Nomor>` : Hapus arsip satuan berdasarkan nomor\n"
-        "• `/delmatkul <Matkul>` : Hapus 1 matkul beserta isinya\n"
+        "• `/delitem <Matkul> | <Nomor>` : Hapus arsip satuan\n"
+        "• `/delmatkul <Matkul>` : Hapus 1 matkul penuh\n"
         "• `/cleararchive` : Hapus seluruh arsip"
     )
 
@@ -89,6 +90,44 @@ async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📖 Matkul: **{matkul}**\n"
         f"📝 Keterangan: {catatan}"
     )
+
+async def search_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = " ".join(context.args).strip().lower()
+    if not query:
+        await update.message.reply_text(
+            "⚠️ Masukkan kata kunci pencarian!\n"
+            "Contoh: `/search Pemrograman` atau `/search database`"
+        )
+        return
+
+    data = load_data()
+    archives = data.get("archive", {})
+    if not archives:
+        await update.message.reply_text("📭 Belum ada arsip yang tersimpan.")
+        return
+
+    found_results = []
+    for matkul, catatan_list in archives.items():
+        # Cek apakah query cocok dengan nama matkul atau ada di dalam catatan
+        matched_items = []
+        for idx, item in enumerate(catatan_list, 1):
+            if query in matkul.lower() or query in item.lower():
+                matched_items.append((idx, item))
+        
+        if matched_items or query in matkul.lower():
+            found_results.append((matkul, matched_items if matched_items else list(enumerate(catatan_list, 1))))
+
+    if not found_results:
+        await update.message.reply_text(f"🔍 Tidak ditemukan arsip dengan kata kunci: **{query}**")
+        return
+
+    msg = f"🔎 **Hasil Pencarian untuk:** `{query}`\n"
+    for matkul, items in found_results:
+        msg += f"\n📖 **{matkul}**:\n"
+        for idx, item in items:
+            msg += f"  {idx}. {item}\n"
+
+    await update.message.reply_text(msg)
 
 async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -143,16 +182,13 @@ async def archive_media_handler(update: Update, context: ContextTypes.DEFAULT_TY
         f"📌 Keterangan: {final_entry}"
     )
 
-# --- FITUR PENGHAPUSAN ARSIP ---
-
 async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_args = " ".join(context.args)
     if "|" not in text_args:
         await update.message.reply_text(
             "⚠️ Format salah!\n\n"
             "Gunakan format:\n`/delitem <Matkul> | <Nomor>`\n"
-            "*(Contoh: `/delitem Pemrograman | 1`)*\n\n"
-            "Cek nomor urut dengan mengetik `/archive`."
+            "*(Contoh: `/delitem Pemrograman | 1`)*"
         )
         return
 
@@ -164,7 +200,7 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("⚠️ Nomor arsip harus berupa angka! Contoh: `/delitem Pemrograman | 1`")
         return
 
-    idx = int(idx_str) - 1 # Indeks list python mulai dari 0
+    idx = int(idx_str) - 1
 
     data = load_data()
     if "archive" not in data or matkul not in data["archive"]:
@@ -178,7 +214,6 @@ async def delete_item(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     removed_item = items.pop(idx)
     
-    # Jika list matkul jadi kosong, hapus key matkul-nya
     if not items:
         del data["archive"][matkul]
 
@@ -215,12 +250,13 @@ def main():
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("archive", archive_command))
+    app.add_handler(CommandHandler("search", search_archive))
     app.add_handler(CommandHandler("delitem", delete_item))
     app.add_handler(CommandHandler("delmatkul", delete_matkul))
     app.add_handler(CommandHandler("cleararchive", clear_archive))
     app.add_handler(MessageHandler(filters.ATTACHMENT | filters.PHOTO | filters.VIDEO | filters.AUDIO, archive_media_handler))
 
-    print("Archive Bot All-In-One (with Delete Features) sedang berjalan...")
+    print("Archive Bot All-In-One (with Search & Delete) sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
