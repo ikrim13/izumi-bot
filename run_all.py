@@ -1,9 +1,9 @@
 import subprocess
 import sys
-import time
 import os
+import threading
+import time
 
-# Daftar file bot kamu yang mau dijalankan barengan
 bot_files = [
     "bot_academic.py",
     "bot_archive.py",
@@ -11,24 +11,31 @@ bot_files = [
     "bot_nexus.py"
 ]
 
+def run_bot(filename):
+    print(f"-> Memulai thread untuk {filename}")
+    # Menggunakan subprocess dengan unbuffered output agar log-nya keluar
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+    subprocess.run([sys.executable, filename], env=env)
+
 if __name__ == "__main__":
-    processes = []
+    threads = []
     
     for bot in bot_files:
         if os.path.exists(bot):
-            print(f"Memulai {bot}...")
-            # Menjalankan setiap file bot sebagai proses terpisah
-            p = subprocess.Popen([sys.executable, bot])
-            processes.append(p)
-            time.sleep(1.5) # Jeda sedikit agar tidak bentrok saat inisialisasi
+            t = threading.Thread(target=run_bot, args=(bot,))
+            t.daemon = True
+            t.start()
+            threads.append(t)
+            time.sleep(1) # Jeda sedikit tiap bot
         else:
-            print(f"File {bot} tidak ditemukan, dilewati.")
+            print(f"File {bot} tidak ditemukan.")
 
+    print("Semua bot thread telah diinisialisasi secara paralel!")
+    
+    # Menjaga proses utama tetap hidup
     try:
-        # Menjaga proses utama tetap hidup agar semua bot terus berjalan
-        for p in processes:
-            p.wait()
+        while True:
+            time.sleep(1)
     except KeyboardInterrupt:
         print("Mematikan semua bot...")
-        for p in processes:
-            p.terminate()
