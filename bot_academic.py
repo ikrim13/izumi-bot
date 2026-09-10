@@ -234,7 +234,7 @@ def main():
     job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
 
     print("Academic Bot sedang berjalan dengan integrasi E-Learning & Job Automation lengkap...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
