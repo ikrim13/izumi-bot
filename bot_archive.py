@@ -2,7 +2,7 @@ import os
 import json
 import logging
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import Application, CommandHandler, ContextTypes
 
 ARCHIVE_TOKEN = os.getenv("IZUMI_ARCHIVE_TOKEN")
 
@@ -17,7 +17,11 @@ def load_data():
                 return json.load(f)
         except Exception:
             pass
-    return {"schedules": {}, "archive": {}}
+    return {
+        "archive": {},
+        "notified_logs": [],
+        "notified_classes": []
+    }
 
 def save_data(data):
     try:
@@ -28,65 +32,74 @@ def save_data(data):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🗂️ [Archive Bot] Modul arsip aktif.\n"
-        "Perintah:\n"
-        "- `/archive` : Lihat seluruh daftar arsip\n"
-        "- `/archive <Matkul> | <Catatan>` : Simpan catatan teks"
+        "🗂️ **[Archive Bot] Modul Arsip & Catatan Aktif.**\n\n"
+        "Perintah yang tersedia:\n"
+        "- `/archive <Matkul> | <Catatan>` : Menyimpan catatan baru\n"
+        "- `/archive` : Melihat semua daftar arsip tersimpan"
     )
 
-async def list_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def archive_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text_args = " ".join(context.args)
     data = load_data()
-    archive = data.get("archive", {})
+    if "archive" not in data:
+        data["archive"] = {}
 
-    if not archive:
-        await update.message.reply_text("🗂️ Belum ada arsip yang tersimpan.")
+    # Jika user mengirim perintah tanpa argumen (hanya /archive) -> Tampilkan daftar arsip
+    if not text_args:
+        archives = data["archive"]
+        if not archives:
+            await update.message.reply_text("📭 Belum ada arsip yang tersimpan.\n\nGunakan format:\n`/archive <Matkul> | <Catatan>`")
+            return
+
+        msg = "📚 **Daftar Arsip & Catatan Kuliah:**\n"
+        for matkul, catatan_list in archives.items():
+            msg += f"\n📖 **{matkul}**:\n"
+            for idx, item in enumerate(catatan_list, 1):
+                msg += f"  {idx}. {item}\n"
+        await update.message.reply_text(msg)
         return
 
-    if text_args:
-        matkul_key = text_args.strip().title()
-        if matkul_key in archive:
-            items = archive[matkul_key]
-            resp = f"📂 **Arsip untuk {matkul_key}:**\n"
-            for i, item in enumerate(items, 1):
-                resp += f"{i}. {item}\n"
-            await update.message.reply_text(resp)
-        else:
-            await update.message.reply_text(f"⚠️ Tidak ada arsip ditemukan untuk mata kuliah **{matkul_key}**.")
+    # Jika user menggunakan format pemisah |
+    if "|" not in text_args:
+        await update.message.reply_text(
+            "⚠️ Format salah!\n\nGunakan format:\n`/archive <Matkul> | <Catatan>`\n\n"
+            "Contoh:\n`/archive Pemrograman | Jangan lupa pelajari database`"
+        )
         return
 
-    text = "🗂️ **Daftar Seluruh Arsip Mata Kuliah:**\n"
-    for matkul, items in archive.items():
-        text += f"\n• **{matkul}**: {len(items)} item tersimpan"
-    await update.message.reply_text(text)
+    # Pecah matkul dan catatan
+    parts = text_args.split("|", 1)
+    matkul = parts[0].strip()
+    catatan = parts[1].strip()
 
-async def save_text_archive(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text_args = update.message.text
-    if text_args and text_args.startswith("/archive"):
-        parts_cmd = text_args.replace("/archive", "", 1).strip()
-        if "|" in parts_cmd:
-            parts = parts_cmd.split("|", 1)
-            matkul = parts[0].strip().title()
-            catatan = parts[1].strip()
+    if not matkul or not catatan:
+        await update.message.reply_text("⚠️ Nama mata kuliah atau catatan tidak boleh kosong!")
+        return
 
-            data = load_data()
-            if matkul not in data["archive"]:
-                data["archive"][matkul] = []
-            
-            data["archive"][matkul].append(f"📝 {catatan}")
-            save_data(data)
-            await update.message.reply_text(f"✅ Catatan berhasil disimpan ke arsip **{matkul}**.")
+    if matkul not in data["archive"]:
+        data["archive"][matkul] = []
+
+    data["archive"][matkul].append(catatan)
+    save_data(data)
+
+    await update.message.reply_text(
+        f"✅ **Arsip Berhasil Disimpan!**\n\n"
+        f"📖 Matkul: **{matkul}**\n"
+        f"📝 Catatan: {catatan}"
+    )
 
 def main():
     if not ARCHIVE_TOKEN:
         logging.error("IZUMI_ARCHIVE_TOKEN tidak ditemukan!")
         return
+
     app = Application.builder().token(ARCHIVE_TOKEN).build()
+
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("archive", list_archive))
-    
+    app.add_handler(CommandHandler("archive", archive_command))
+
     print("Archive Bot sedang berjalan...")
-    app.run_polling()
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
