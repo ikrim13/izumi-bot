@@ -25,7 +25,7 @@ def load_data():
     return {
         "archive": {},
         "notified_logs": [],
-        "notified_classes": []  # Riwayat notifikasi kelas agar tidak spam
+        "notified_classes": []
     }
 
 def save_data(data):
@@ -37,11 +37,7 @@ def save_data(data):
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "📚 [Academic Bot] Modul akademik & e-learning aktif.\n"
-        "Fitur otomatis:\n"
-        "- Pengingat jadwal harian (07:00)\n"
-        "- Pengingat 30 menit sebelum kuliah mulai (lengkap dengan ruangan)\n"
-        "- Pengingat deadline tugas (H-1, 3 jam, 30 menit)\n\n"
+        "📚 [Academic Bot] Modul akademik & kalender aktif.\n\n"
         "Perintah manual:\n"
         "- `/jadwal` : Lihat jadwal/kegiatan kalender terdekat\n"
         "- `/besok` : Cek jadwal & kegiatan untuk besok\n"
@@ -118,14 +114,14 @@ async def minggu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(text)
 
 async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengambil data deadline dari E-Learning Poltekapp...")
+    await update.message.reply_text("🔄 Sedang mengambil data deadline dari Kalender...")
     events = fetch_calendar_events()
     
     if not events:
-        await update.message.reply_text("🎉 Tidak ada deadline tugas aktif saat ini di kalender E-Learning.")
+        await update.message.reply_text("🎉 Tidak ada deadline tugas aktif saat ini di kalender.")
         return
 
-    text = "📝 **Daftar Tugas & Deadline E-Learning Poltekapp:**\n"
+    text = "📝 **Daftar Tugas & Deadline Terdekat:**\n"
     for i, (title, dt) in enumerate(events[:10], 1):
         formatted_date = dt.strftime("%d %b %Y, %H:%M")
         text += f"\n{i}. **{title}**\n   ⏰ Deadline: {formatted_date}"
@@ -136,6 +132,7 @@ def fetch_calendar_events():
     try:
         response = requests.get(ICAL_URL, timeout=10)
         if response.status_code != 200:
+            logging.error(f"Gagal mengambil iCal, status code: {response.status_code}")
             return []
 
         cal = Calendar.from_ical(response.content)
@@ -143,14 +140,19 @@ def fetch_calendar_events():
         
         for component in cal.walk('vevent'):
             summary = component.get('summary')
-            dtend = component.get('dtend')
+            dt = component.get('dtstart') or component.get('dtend')
             
-            if summary and dtend:
-                date_time = dtend.dt
+            if summary and dt:
+                date_time = dt.dt
                 if isinstance(date_time, datetime):
                     if date_time.tzinfo is not None:
                         date_time = date_time.astimezone().replace(tzinfo=None)
                     events.append((str(summary), date_time))
+                elif isinstance(date_time, type(datetime.now().date())):
+                    date_time = datetime.combine(date_time, time(0, 0))
+                    events.append((str(summary), date_time))
+                    
+        events.sort(key=lambda x: x[1])
         return events
     except Exception as e:
         logging.error(f"Error fetching ical: {e}")
@@ -170,12 +172,12 @@ async def job_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     
     todays_classes = [title for title, dt in events if dt.date() == today_date]
 
-    text = f"☀️ **Selamat Pagi, Kabinet!**\n📅 Jadwal & Kegiatan Hari Ini (**{today_id}**):\n"
+    text = f"☀️ **Selamat Pagi!**\n📅 Jadwal & Kegiatan Hari Ini (**{today_id}**):\n"
     if todays_classes:
         for c in todays_classes:
             text += f"• **{c}**\n"
     else:
-        text += "• Tidak ada jadwal kuliah atau kegiatan hari ini. Santai dulu bro!\n"
+        text += "• Tidak ada jadwal kuliah atau kegiatan hari ini.\n"
 
     await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=text)
 
@@ -274,7 +276,7 @@ def main():
     job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
     job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
 
-    print("Academic Bot sedang berjalan dengan integrasi Kalender & Job Automation lengkap...")
+    print("Academic Bot sedang berjalan...")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
