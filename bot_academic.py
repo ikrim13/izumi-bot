@@ -319,7 +319,7 @@ def main():
     app.add_handler(CommandHandler("tugas", tugas))
     
     job_queue = app.job_queue
-    job_queue.run_daily(job_daily_schedule, time=time(hour=7, minute=0, tzinfo=ZoneInfo("Asia/Jakarta")))
+    job_queue.run_daily(job_daily_schedule, time=time(hour=9, minute=2, tzinfo=ZoneInfo("Asia/Jakarta")))
     job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
     job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
 
