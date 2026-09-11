@@ -181,16 +181,18 @@ async def job_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
     events = fetch_calendar_events()
     today_date = datetime.now().date()
     
-    todays_classes = [title for title, dt in events if dt.date() == today_date]
+    # Ambil judul beserta jamnya (mirip kayak perintah /besok)
+    todays_events = [(title, dt) for title, dt in events if dt.date() == today_date]
 
     text = f"☀️ **Selamat Pagi!**\n📅 Jadwal & Kegiatan Hari Ini (**{today_id}**):\n"
-    if todays_classes:
-        for c in todays_classes:
-            text += f"• **{c}**\n"
+    if todays_events:
+        for title, dt in todays_events:
+            time_str = dt.strftime("%H:%M")
+            text += f"• **{title}**\n  ⏰ Pukul {time_str}\n"
     else:
         text += "• Tidak ada jadwal kuliah atau kegiatan hari ini.\n"
 
-    await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=text)
+    await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=text, parse_mode="Markdown")
 
 async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
     if not TARGET_GROUP_ID:
