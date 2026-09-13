@@ -1,39 +1,31 @@
 import subprocess
+import os
 import sys
-import time
 
-# Daftar script bot yang akan dijalankan bersamaan
-BOT_SCRIPTS = [
+# Daftar file bot yang akan dijalankan secara bersamaan
+bots = [
     "bot_academic.py",
     "bot_archive.py",
     "bot_command.py",
-    "bot_nexus.py"
+    # Kalau bot_nexus.py mau dinyalakan juga, uncomment baris di bawah ini:
+    # "bot_nexus.py"
 ]
 
-def run_bots():
-    processes = []
-    
-    print("🚀 Memulai ekosistem Izumi Bots...")
-    
-    # Jalankan setiap script bot di proses terpisah
-    for script in BOT_SCRIPTS:
-        try:
-            print(f"▶️ Menjalankan {script}...")
-            p = subprocess.Popen([sys.executable, script])
-            processes.append(p)
-        except Exception as e:
-            print(f"❌ Gagal menjalankan {script}: {e}")
+processes = []
 
-    print("✅ Semua bot telah diproses dan berjalan di background!")
+try:
+    # Jalankan setiap bot sebagai proses terpisah
+    for bot in bots:
+        print(f"Menjalankan {bot}...")
+        p = subprocess.Popen([sys.executable, bot])
+        processes.append(p)
 
-    # Jaga agar script utama tidak mati
-    try:
-        for p in processes:
-            p.wait()
-    except KeyboardInterrupt:
-        print("\n⏹️ Mematikan semua bot...")
-        for p in processes:
-            p.terminate()
+    # Biar proses utamanya tetap hidup memantau anak-anak buahnya
+    for p in processes:
+        p.wait()
 
-if __name__ == '__main__':
-    run_bots()
+except KeyboardInterrupt:
+    print("\nMematikan seluruh ekosistem Izumi...")
+    for p in processes:
+        p.terminate()
+    sys.exit(0)
