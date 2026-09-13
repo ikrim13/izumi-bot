@@ -20,19 +20,15 @@ ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?us
 DATA_FILE = "academic_data.json"
 
 def fetch_and_parse_ical():
-    """Mengambil data iCal secara aman dan menampilkan debug log."""
+    """Mengambil data iCal secara aman."""
     jadwal_list = []
     urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
     
     for source_name, url in urls:
         try:
-            logging.info(f"Mencoba mengambil iCal dari {source_name}...")
             response = requests.get(url, timeout=15)
-            logging.info(f"Status HTTP {source_name}: {response.status_code}")
-            
             if response.status_code == 200:
                 cal = Calendar.from_ical(response.content)
-                count = 0
                 for component in cal.walk('vevent'):
                     summary = str(component.get('summary', 'Tanpa Judul'))
                     dtstart = component.get('dtstart')
@@ -49,14 +45,12 @@ def fetch_and_parse_ical():
                         item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
                         if item_baru not in jadwal_list:
                             jadwal_list.append(item_baru)
-                            count += 1
-                logging.info(f"Sukses! Berhasil memuat {count} agenda dari {source_name}")
+                logging.info(f"Berhasil memuat agenda dari {source_name}")
             else:
                 logging.error(f"Gagal ambil iCal {source_name}, status: {response.status_code}")
         except Exception as e:
             logging.error(f"Error parsing iCal {source_name}: {e}")
             
-    logging.info(f"Total keseluruhan jadwal tersinkron: {len(jadwal_list)} item.")
     return jadwal_list
 
 def load_data():
@@ -126,7 +120,6 @@ def hapus_tugas(nama: str) -> str:
         return f"🎉 Tugas '{nama}' berhasil dihapus."
     return f"❌ Tugas '{nama}' tidak ditemukan."
 
-# Konfigurasi Gemini AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -134,7 +127,6 @@ if GEMINI_API_KEY:
 else:
     model = None
 
-# Flask Keep-Alive Server (Port 8080)
 app = Flask(__name__)
 
 @app.route('/')
@@ -197,71 +189,15 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    day_map = {
-        "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
-        "jumat": 4, "sabtu": 5, "minggu": 6
-    }
-    
-    target_weekday = None
-    for day_name, d_idx in day_map.items():
-        if day_name in msg_lower:
-            target_weekday = d_idx
-            break
-
-    if target_weekday is not None:
-        now = datetime.now()
-        days_ahead = target_weekday - now.weekday()
-        if days_ahead < 0:
-            days_ahead += 7
-        target_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
-        
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
-        day_str = [k for k, v in day_map.items() if v == target_weekday][0].capitalize()
-        
-        resp = f"📅 **Jadwal Hari {day_str} ({target_date}):**\n"
-        if filtered:
-            for j in sorted(filtered, key=lambda x: x.get("waktu", "")):
-                resp += f"- **{j['nama']}** ({j.get('waktu', '-')})\n"
-        else:
-            resp += f"Tidak ada jadwal kuliah tercatat di tanggal {target_date}. (Total data di DB: {len(db.get('jadwal', []))} item)"
-        await update.message.reply_text(resp)
-        return
-
-    # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI
-    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja jadwal", "jadwalnya", "buat 1 minggu"]):
-        now = datetime.now()
-        end_date = now + timedelta(days=7)
-        filtered = []
-        for j in db.get("jadwal", []):
-            try:
-                j_date = datetime.strptime(j.get("tanggal"), "%Y-%m-%d")
-                if now.date() <= j_date.date() <= end_date.date():
-                    filtered.append(j)
-            except Exception:
-                pass
-        filtered = sorted(filtered, key=lambda x: x.get("tanggal", ""))
-        resp = f"📅 **Jadwal 7 Hari ke Depan:**\n"
-        if filtered:
-            for j in filtered:
+    # JIKA USER NANYA JADWAL / HARI / SEMINGGU (Langsung Tampilkan List Mentah dari Database Biar Gak Meleset)
+    if any(k in msg_lower for k in ["jadwal", "seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja", "rabu", "senin", "selasa", "kamis", "jumat", "sabtu", "minggu"]):
+        jadwal_list = db.get("jadwal", [])
+        resp = f"📅 **Daftar Seluruh Agenda & Jadwal (Total {len(jadwal_list)} item):**\n"
+        if jadwal_list:
+            for j in jadwal_list:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Tidak ada jadwal kuliah atau agenda tercatat dalam 7 hari ke depan. (Total data di DB: {len(db.get('jadwal', []))} item)"
-        await update.message.reply_text(resp)
-        return
-
-    # 2. CEK JADWAL HARI INI / BESOK
-    if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower):
-        target_date = datetime.now().strftime("%Y-%m-%d")
-        if "besok" in msg_lower:
-            target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
-        resp = f"📅 **Jadwal untuk tanggal {target_date}:**\n"
-        if filtered:
-            for j in filtered:
-                resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
-        else:
-            resp += f"Tidak ada jadwal tercatat di tanggal ini."
+            resp += "Belum ada jadwal tersinkron."
         await update.message.reply_text(resp)
         return
 
@@ -290,7 +226,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🤖 (Mode Hemat Aktif) Otak AI-ku lagi istirahat sebentar karena limit gratis harian tercapai, "
             "tapi **database jadwal, tugas, dan reminder otomatis kamu tetep jalan 100% normal!** "
-            "Ketik 'jadwal', 'tugas', atau 'hari rabu' kapanpun kamu butuh."
+            "Ketik 'jadwal' kapanpun kamu butuh."
         )
 
 def main():
