@@ -2,7 +2,7 @@ import subprocess
 import sys
 import time
 
-# Daftar script bot yang akan dijalankan secara paralel di Railway
+# Daftar file bot yang mau dijalankan secara bersamaan
 bot_scripts = [
     "bot_academic.py",
     "bot_archive.py",
@@ -10,28 +10,31 @@ bot_scripts = [
     "bot_nexus.py"
 ]
 
-processes = []
-
-def start_bots():
-    for script in bot_scripts:
-        print(f"Menjalankan {script}...")
-        # Jalankan setiap script menggunakan python interpreter
-        p = subprocess.Popen([sys.executable, script])
-        processes.append(p)
-        # Beri jeda sedikit agar port flask / polling tidak bentrok bersamaan
-        time.sleep(2)
+def run_bot(script_name):
+    """Menjalankan satu script bot dan otomatis me-restart jika crash."""
+    while True:
+        print(f"[RUNNER] Menjalankan {script_name}...")
+        process = subprocess.Popen([sys.executable, script_name])
+        process.wait()
+        print(f"[RUNNER] {script_name} berhenti. Me-restart dalam 5 detik...")
+        time.sleep(5)
 
 if __name__ == "__main__":
+    processes = []
+    
+    # Jalankan setiap bot di proses terpisah
+    for script in bot_scripts:
+        p = subprocess.Popen([sys.executable, script])
+        processes.append(p)
+        print(f"[RUNNER] Berhasil mentrigger {script} (PID: {p.pid})")
+        time.sleep(2) # Jeda dikit biar gak nabrak pas inisialisasi awal
+
     try:
-        start_bots()
-        # Terus pantau proses agar worker railway tetap hidup
+        # Biar proses utamanya tetep hidup mantau
         while True:
-            time.sleep(10)
-            for i, p in enumerate(processes):
-                if p.poll() is not None:
-                    print(f"Perhatian: {bot_scripts[i]} mati, merestart...")
-                    processes[i] = subprocess.Popen([sys.executable, bot_scripts[i]])
+            time.sleep(1)
     except KeyboardInterrupt:
-        print("Menghentikan semua bot...")
+        print("[RUNNER] Menghentikan semua bot...")
         for p in processes:
             p.terminate()
+        sys.exit(0)
