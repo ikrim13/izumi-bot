@@ -5,8 +5,6 @@ import re
 from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
-import requests
-from icalendar import Calendar
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -14,44 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 # Setup Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-ICAL_GOOGLE = "https://calendar.google.com/calendar/ical/ikrimahikrim8%40gmail.com/private-364c46810d96e1681183ca6ad8be97c2/basic.ics"
-ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?userid=5325&authtoken=16e794057ce3844f51ea241e4fe35032993933db&preset_what=all&preset_time=custom"
-
 DATA_FILE = "academic_data.json"
-
-def fetch_and_parse_ical():
-    """Mengambil data iCal secara aman."""
-    jadwal_list = []
-    urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
-    
-    for source_name, url in urls:
-        try:
-            response = requests.get(url, timeout=10)
-            if response.status_code == 200:
-                cal = Calendar.from_ical(response.content)
-                for component in cal.walk('vevent'):
-                    summary = str(component.get('summary', 'Tanpa Judul'))
-                    dtstart = component.get('dtstart')
-                    
-                    if dtstart:
-                        dt = dtstart.dt
-                        if isinstance(dt, datetime):
-                            tanggal = dt.strftime("%Y-%m-%d")
-                            waktu = dt.strftime("%H:%M")
-                        else:
-                            tanggal = dt.strftime("%Y-%m-%d")
-                            waktu = "Sepanjang Hari"
-                        
-                        item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
-                        if item_baru not in jadwal_list:
-                            jadwal_list.append(item_baru)
-                logging.info(f"Berhasil memuat agenda dari {source_name}")
-            else:
-                logging.error(f"Gagal ambil iCal {source_name}, status: {response.status_code}")
-        except Exception as e:
-            logging.error(f"Error parsing iCal {source_name}: {e}")
-            
-    return jadwal_list
 
 def load_data():
     if os.path.exists(DATA_FILE):
@@ -60,11 +21,7 @@ def load_data():
                 return json.load(f)
         except Exception:
             pass
-            
-    initial_jadwal = fetch_and_parse_ical()
-    data = {"jadwal": initial_jadwal, "tugas": []}
-    save_data(data)
-    return data
+    return {"jadwal": [], "tugas": []}
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
@@ -72,19 +29,8 @@ def save_data(data):
 
 db = load_data()
 
-def background_sync_ical():
-    global db
-    logging.info("Memulai sinkronisasi berkala iCal...")
-    live_jadwal = fetch_and_parse_ical()
-    if live_jadwal:
-        manual_items = [j for j in db.get("jadwal", []) if j.get("sumber") in ["Manual", "Chat"]]
-        db["jadwal"] = live_jadwal + manual_items
-        save_data(db)
-        logging.info("Sinkronisasi iCal selesai.")
-
-# --- FUNGSI PARSER NATURAL (TAMBAH & HAPUS OTOMATIS) ---
+# --- FUNGSI CRUD LOKAL NATURAL ---
 def parse_natural_add(text):
-    """Mencoba menebak nama kegiatan, tanggal (YYYY-MM-DD), dan waktu (HH:MM) dari kalimat santai."""
     text_lower = text.lower()
     
     # Cari pola tanggal YYYY-MM-DD
@@ -100,14 +46,13 @@ def parse_natural_add(text):
         if match_jam:
             waktu = f"{int(match_jam.group(1)):02d}:00"
         else:
-            waktu = "08:00" # Default jam jika tidak disebutkan
+            waktu = "08:00"
             
-    # Ekstraksi nama kegiatan (membersihkan kata perintah)
+    # Bersihkan teks untuk ambil nama kegiatan
     clean_text = text
     for w in ["tambahin", "tambah", "jadwal", "tolong", "buatkan", "agenda", "buat"]:
         clean_text = re.sub(w, '', clean_text, flags=re.IGNORECASE)
     
-    # Buang bagian tanggal & waktu dari teks nama
     clean_text = re.sub(r'\d{4}-\d{2}-\d{2}', '', clean_text)
     clean_text = re.sub(r'jam\s+\d{1,2}[:\.]?\d*', '', clean_text, flags=re.IGNORECASE)
     clean_text = re.sub(r'\d{1,2}[:\.]\d{2}', '', clean_text)
@@ -123,7 +68,6 @@ def tambah_jadwal_lokal(nama: str, tanggal: str, waktu: str) -> str:
     return f"Sip, udah aku catat ya:\n📌 **{nama}**\n📅 {tanggal} | ⏰ Pukul {waktu}"
 
 def hapus_jadwal_lokal(text: str) -> str:
-    # Bersihkan kata perintah hapus
     keyword = text.lower()
     for w in ["hapus", "jadwal", "tolong", "batalkan", "buang", "nggak", "gak"]:
         keyword = keyword.replace(w, "")
@@ -133,7 +77,9 @@ def hapus_jadwal_lokal(text: str) -> str:
         return "Mau hapus jadwal apa nih? Coba sebutkan nama kegiatannya."
 
     initial_len = len(db["jadwal"])
+    # Filter dan buang jadwal yang mengandung keyword tersebut
     db["jadwal"] = [j for j in db["jadwal"] if keyword not in j["nama"].lower()]
+    
     if len(db["jadwal"]) < initial_len:
         save_data(db)
         return f"Oke, jadwal yang mengandung kata '{keyword}' udah aku hapus dari daftar."
@@ -144,7 +90,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Full Natural Chat) is running!"
+    return "Izumi Academic Bot (Local Storage Mode) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -182,14 +128,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # 1. DETEKSI NIAT TAMBAH JADWAL SECARA NATURAL
+    # 1. TAMBAH JADWAL NATURAL
     if any(k in msg_lower for k in ["tambahin", "tambah", "buatkan jadwal", "ada jadwal baru", "tambah jadwal"]):
         nama, tgl, wkt = parse_natural_add(user_message)
         res = tambah_jadwal_lokal(nama, tgl, wkt)
         await update.message.reply_text(res)
         return
 
-    # 2. DETEKSI NIAT HAPUS JADWAL SECARA NATURAL
+    # 2. HAPUS JADWAL NATURAL
     if any(k in msg_lower for k in ["hapus", "batalkan", "buang jadwal"]):
         res = hapus_jadwal_lokal(user_message)
         await update.message.reply_text(res)
@@ -227,7 +173,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for j in filtered[:15]:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan. Santai!"
+            resp += f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan. Yuk tambahin dengan ngomong santai, contoh: *'tambahin kuliah algoritma tanggal 2026-09-16 jam 13:00'*."
         await update.message.reply_text(resp)
         return
 
@@ -268,10 +214,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    # 5. OBROLAN UMUM / FALLBACK SANTAI (Bebas Limit 429)
+    # 5. FALLBACK / INFO PANDUAN
     await update.message.reply_text(
-        "🤖 Halo Ikrimah! Ketik nama hari (misal: `rabu`, `kamis`) buat lihat jadwal, "
-        "atau langsung ngobrol santai buat nambah/hapus jadwal (contoh: *'tambahin rapat besok jam 2 siang'*)."
+        "🤖 Halo Ikrimah! Bot siap dipakai tanpa error:\n"
+        "- Ketik nama hari (misal: `rabu`, `kamis`) buat cek jadwal.\n"
+        "- Tambah jadwal: *'tambahin Kuliah Algoritma tanggal 2026-09-16 jam 13:00'*.\n"
+        "- Hapus jadwal: *'hapus jadwal Algoritma'*."
     )
 
 def main():
@@ -287,7 +235,6 @@ def main():
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
-    scheduler.add_job(background_sync_ical, 'interval', hours=1)
     scheduler.start()
 
     application = ApplicationBuilder().token(token).build()
@@ -295,7 +242,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Full Natural Chat) berjalan...")
+    logging.info("Izumi Academic Bot (Local Storage Mode) berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
