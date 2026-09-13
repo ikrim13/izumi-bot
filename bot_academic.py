@@ -13,10 +13,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Menggunakan model standar yang kompatibel dengan library versi baru
-    model = genai.GenerativeModel('gemini-1.5-flash')
 else:
-    model = None
     logging.error("GEMINI_API_KEY belum disetel di environment variables!")
 
 # Flask Keep-Alive Server untuk Railway (Port 8080)
@@ -29,29 +26,39 @@ def home():
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
+def get_ai_response(prompt):
+    """Fungsi helper untuk mencoba beberapa variasi nama model Gemini secara otomatis"""
+    model_names = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'gemini-1.5-pro', 'models/gemini-1.5-pro', 'gemini-pro']
+    
+    last_error = ""
+    for m_name in model_names:
+        try:
+            model = genai.GenerativeModel(m_name)
+            response = model.generate_content(prompt)
+            if response and response.text:
+                return response.text
+        except Exception as e:
+            last_error = str(e)
+            continue
+            
+    return f"Maaf krim, semua model Gemini gagal diakses. Error terakhir: {last_error}"
+
 # Handler Pesan Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     logging.info(f"Pesan diterima: {user_message}")
 
-    if not model:
+    if not GEMINI_API_KEY:
         await update.message.reply_text("Duh, API Key Gemini belum dipasang di Railway nih bos.")
         return
 
     try:
-        # Panggilan standar Gemini AI
-        response = model.generate_content(user_message)
-        reply_text = response.text
+        # Panggil helper yang otomatis nge-test berbagai nama model
+        reply_text = get_ai_response(user_message)
         await update.message.reply_text(reply_text)
     except Exception as e:
-        logging.error(f"Error Gemini API: {e}")
-        # Coba fallback jika error model 404
-        try:
-            fallback_model = genai.GenerativeModel('gemini-1.5-pro')
-            response = fallback_model.generate_content(user_message)
-            await update.message.reply_text(response.text)
-        except Exception as e2:
-            await update.message.reply_text(f"Duh, otak AI-ku error: {str(e)}")
+        logging.error(f"Error Handler: {e}")
+        await update.message.reply_text(f"Duh, otak AI-ku error: {str(e)}")
 
 def main():
     token = os.getenv("IZUMI_ACADEMIC_TOKEN")
