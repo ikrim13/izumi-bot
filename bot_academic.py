@@ -14,28 +14,6 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 
 DATA_FILE = "academic_data.json"
 
-def load_data():
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r") as f:
-                data = json.load(f)
-                if not data.get("jadwal"):
-                    data["jadwal"] = get_initial_semester3_schedule()
-                    save_data(data)
-                return data
-        except Exception:
-            pass
-            
-    initial_data = {"jadwal": get_initial_semester3_schedule(), "tugas": []}
-    save_data(initial_data)
-    return initial_data
-
-def save_data(data):
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=4)
-
-db = load_data()
-
 day_map_full = {
     "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
     "jumat": 4, "sabtu": 5, "minggu": 6
@@ -45,7 +23,7 @@ def get_initial_semester3_schedule():
     raw_courses = [
         # SENIN
         {"nama": "Manajemen Keuangan", "weekday": 0, "waktu": "13.00-14.20", "ruang": "R. 3.7"},
-        # SELASA (Sesuai request: sesi 2 jam 10.15 di ruang 3.4)
+        # SELASA
         {"nama": "Kuliah Sesi 2", "weekday": 1, "waktu": "10.15", "ruang": "R. 3.4"},
         {"nama": "Aplikasi Komputer", "weekday": 1, "waktu": "13.00-15.00", "ruang": "Lab E.2.1"},
         # RABU
@@ -85,6 +63,28 @@ def get_initial_semester3_schedule():
             generated_list.append(item)
 
     return generated_list
+
+def load_data():
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r") as f:
+                data = json.load(f)
+                if not data.get("jadwal"):
+                    data["jadwal"] = get_initial_semester3_schedule()
+                    save_data(data)
+                return data
+        except Exception:
+            pass
+            
+    initial_data = {"jadwal": get_initial_semester3_schedule(), "tugas": []}
+    save_data(initial_data)
+    return initial_data
+
+def save_data(data):
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f, indent=4)
+
+db = load_data()
 
 def parse_natural_add(text):
     text_lower = text.lower()
@@ -205,7 +205,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Smart Delete Mode) is running!"
+    return "Izumi Academic Bot (Fixed Order) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -315,7 +315,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
         resp = f"📅 **Jadwal tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
@@ -326,7 +326,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🤖 Halo Ikrimah! Jadwal Semester 3 PNJ Akuntansi sudah diperbarui:\n"
+        "🤖 Halo Ikrimah! Jadwal Semester 3 PNJ Akuntansi sudah aktif:\n"
         "- Ketik nama hari (misal: `senin`, `selasa`, `rabu`, dll) buat cek jadwal.\n"
         "- Bot juga bisa hapus jadwal per hari (contoh: *'hapus semua jadwal di hari minggu'*)."
     )
@@ -351,7 +351,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Smart Delete Mode) berjalan...")
+    logging.info("Izumi Academic Bot berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
