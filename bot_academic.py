@@ -87,51 +87,50 @@ def background_sync_ical():
         save_data(db)
         logging.info("Sinkronisasi iCal berkala selesai.")
 
-# --- FUNGSI LOCAL CRUD ---
-def tambah_jadwal(nama: str, tanggal: str, waktu: str, ruang: str = "Kampus") -> str:
-    item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "ruang": ruang, "sumber": "Manual"}
+# --- FUNGSI CRUD LOKAL YANG BISA DIPANGGIL AI / CHAT ---
+def tambah_jadwal(nama: str, tanggal: str, waktu: str) -> str:
+    """Menambahkan jadwal manual baru ke database."""
+    item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "sumber": "Manual"}
     db["jadwal"].append(item)
     save_data(db)
-    return f"✅ Berhasil nambah jadwal: {nama} tanggal {tanggal} pukul {waktu} di {ruang}."
+    return f"Sip, jadwal '{nama}' tanggal {tanggal} jam {waktu} sudah ditambahkan ya!"
 
-def hapus_jadwal(nama: str) -> str:
+def hapus_jadwal(nama_kegiatan: str) -> str:
+    """Menghapus jadwal berdasarkan nama kegiatan."""
     initial_len = len(db["jadwal"])
-    db["jadwal"] = [j for j in db["jadwal"] if nama.lower() not in j["nama"].lower()]
+    db["jadwal"] = [j for j in db["jadwal"] if nama_kegiatan.lower() not in j["nama"].lower()]
     if len(db["jadwal"]) < initial_len:
         save_data(db)
-        return f"🗑️ Jadwal dengan kata kunci '{nama}' berhasil dihapus."
-    return f"❌ Jadwal '{nama}' tidak ditemukan."
+        return f"Oke, jadwal yang ada unsur '{nama_kegiatan}' sudah dihapus dari daftar."
+    return f"Duh, gak nemu jadwal dengan nama '{nama_kegiatan}'."
 
-def tambah_tugas(nama: str, deadline: str) -> str:
-    try:
-        dl_obj = datetime.strptime(deadline, "%Y-%m-%d %H:%M")
-        item = {"nama": nama, "deadline": deadline, "deadline_obj": dl_obj.isoformat()}
-        db["tugas"].append(item)
-        save_data(db)
-        return f"📝 Berhasil nambah tugas: {nama} dengan deadline {deadline}."
-    except Exception as e:
-        return f"Format deadline salah. Gunakan format YYYY-MM-DD HH:MM."
+available_tools = [tambah_jadwal, hapus_jadwal]
 
-def hapus_tugas(nama: str) -> str:
-    initial_len = len(db["tugas"])
-    db["tugas"] = [t for t in db["tugas"] if nama.lower() not in t["nama"].lower()]
-    if len(db["tugas"]) < initial_len:
-        save_data(db)
-        return f"🎉 Tugas '{nama}' berhasil dihapus."
-    return f"❌ Tugas '{nama}' tidak ditemukan."
-
+# Konfigurasi Gemini AI dengan Tools
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel('gemini-3.6-flash')
+    today_str = datetime.now().strftime("%Y-%m-%d (%A)")
+    system_instruction = (
+        f"Kamu adalah Izumi, asisten akademik santai untuk Ikrimah di Politeknik APP Jakarta. "
+        f"Hari ini adalah {today_str}. "
+        f"Kamu bisa membantu menjawab jadwal dari Senin sampai Minggu kapanpun diminta, "
+        f"serta bisa menambahkan atau menghapus jadwal menggunakan fungsi yang tersedia jika diminta oleh user secara natural."
+    )
+    model = genai.GenerativeModel(
+        model_name='gemini-3.6-flash',
+        system_instruction=system_instruction,
+        tools=available_tools
+    )
 else:
     model = None
 
+# Flask Keep-Alive Server (Port 8080)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Anti-Limit Ultimate) is running!"
+    return "Izumi Academic Bot (Chat Santai Ultimate) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -189,6 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
+    # 1. CEK JADWAL BERDASARKAN HARI (Senin - Minggu) SECARA LOKAL (Anti-Limit & Instan)
     day_map = {
         "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
         "jumat": 4, "sabtu": 5, "minggu": 6
@@ -202,9 +202,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             day_str_target = day_name.capitalize()
             break
 
-    if target_weekday is not None:
+    if target_weekday is not None and not any(k in msg_lower for k in ["tambah", "buat", "hapus"]):
         now = datetime.now()
-        # Ambil jadwal dari hari ini ke depan (mencakup setahun penuh yang ada di database)
         filtered = []
         for j in db.get("jadwal", []):
             try:
@@ -216,18 +215,17 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         filtered = sorted(filtered, key=lambda x: x.get("tanggal", ""))
         
-        resp = f"📅 **Daftar Jadwal Hari {day_str_target} (Mendatang):**\n"
+        resp = f"📅 **Jadwal Hari {day_str_target} (Mendatang):**\n"
         if filtered:
-            # Batasi tampilkan max 10 agenda terdekat biar chat gak kepanjangan
-            for j in filtered[:10]:
+            for j in filtered[:12]:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Tidak ada jadwal kuliah atau agenda tercatat untuk hari {day_str_target} ke depan."
+            resp += f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan. Santai!"
         await update.message.reply_text(resp)
         return
 
-    # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI
-    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja", "agenda"]):
+    # 2. CEK JADWAL SEMINGGU / HARI INI / BESOK SECARA LOKAL
+    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
         filtered = []
@@ -244,52 +242,43 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for j in filtered:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += "Tidak ada jadwal kuliah atau agenda tercatat dalam 7 hari ke depan."
+            resp += "Aman, gak ada jadwal dalam 7 hari ke depan."
         await update.message.reply_text(resp)
         return
 
-    # 2. CEK JADWAL HARI INI / BESOK
     if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower):
         target_date = datetime.now().strftime("%Y-%m-%d")
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
-        resp = f"📅 **Jadwal untuk tanggal {target_date}:**\n"
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
+        resp = f"📅 **Jadwal tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
                 resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Tidak ada jadwal tercatat di tanggal ini."
+            resp += "Nggak ada jadwal di tanggal ini. Kosong!"
         await update.message.reply_text(resp)
         return
 
-    # 3. LIHAT DAFTAR TUGAS
-    if "tugas" in msg_lower and ("lihat" in msg_lower or "apa" in msg_lower or "daftar" in msg_lower):
-        tugas_list = db.get("tugas", [])
-        resp = f"📝 **Daftar Tugas Aktif:**\n"
-        if tugas_list:
-            for t in tugas_list:
-                resp += f"- {t['nama']} (Deadline: {t['deadline']})\n"
-        else:
-            resp += "Belum ada tugas akademik yang tercatat. Aman!"
-        await update.message.reply_text(resp)
-        return
-
-    # 4. OBROLAN UMUM
+    # 3. CHAT UMUM / TAMBAH & HAPUS JADWAL VIA GEMINI (Fungsi Otomatis)
     if not model:
         await update.message.reply_text("Duh, API Key Gemini belum dipasang.")
         return
 
     try:
-        response = model.generate_content(f"Kamu adalah asisten akademik Politeknik APP Jakarta untuk Ikrimah. Jawab ringkas dan santai: {user_message}")
+        # Berikan ringkasan data agar AI tahu konteks saat diajak nambah/hapus
+        prompt = f"User bilang: {user_message}. Tanggal hari ini: {datetime.now().strftime('%Y-%m-%d')}."
+        chat_session = model.start_chat(enable_automatic_function_calling=True)
+        response = chat_session.send_message(prompt)
+        
         await update.message.reply_text(response.text)
     except Exception as e:
         logging.error(f"Error Gemini API: {e}")
         await update.message.reply_text(
-            "🤖 (Mode Hemat Aktif) Otak AI-ku lagi istirahat sebentar karena limit gratis harian tercapai, "
-            "tapi **database jadwal, tugas, dan reminder otomatis kamu tetep jalan 100% normal!** "
-            "Ketik 'jadwal' kapanpun kamu butuh."
+            "🤖 Otak AI-ku lagi istirahat sebentar karena limit gratis harian, "
+            "tapi **database jadwal, tugas, dan cek hari (senin-minggu) kamu tetep jalan normal!** "
+            "Coba ketik nama hari (misal: 'rabu') buat lihat jadwal."
         )
 
 def main():
@@ -313,7 +302,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Anti-Limit Ultimate) berjalan...")
+    logging.info("Izumi Academic Bot (Chat Santai Ultimate) berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
