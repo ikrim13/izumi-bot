@@ -13,7 +13,7 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    # Menggunakan model gemini-1.5-flash yang cepat dan stabil
+    # Menggunakan model standar yang kompatibel dengan library versi baru
     model = genai.GenerativeModel('gemini-1.5-flash')
 else:
     model = None
@@ -45,7 +45,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(reply_text)
     except Exception as e:
         logging.error(f"Error Gemini API: {e}")
-        await update.message.reply_text(f"Duh, otak AI-ku error: {str(e)}")
+        # Coba fallback jika error model 404
+        try:
+            fallback_model = genai.GenerativeModel('gemini-1.5-pro')
+            response = fallback_model.generate_content(user_message)
+            await update.message.reply_text(response.text)
+        except Exception as e2:
+            await update.message.reply_text(f"Duh, otak AI-ku error: {str(e)}")
 
 def main():
     token = os.getenv("IZUMI_ACADEMIC_TOKEN")
