@@ -1,83 +1,70 @@
 import os
 import logging
-from datetime import datetime
 from flask import Flask
 from threading import Thread
+import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
-import google.generativeai as genai
 
-# Konfigurasi Logging
+# Setup Logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-# Ambil Variabel Lingkungan (Environment Variables)
-TOKEN = os.getenv("IZUMI_ACADEMIC_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "8791729948"))
-
 # Konfigurasi Gemini AI
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel('gemini-1.5-flash')
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
+    # Menggunakan model gemini-1.5-flash yang cepat dan stabil
+    model = genai.GenerativeModel('gemini-1.5-flash')
+else:
+    model = None
+    logging.error("GEMINI_API_KEY belum disetel di environment variables!")
 
-# Flask App Sederhana untuk UptimeRobot (Anti-Tidur Railway)
-app = Flask('')
+# Flask Keep-Alive Server untuk Railway (Port 8080)
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot is alive and running 24/7!"
+    return "Izumi Academic Bot is running 24/7!"
 
-def run_web():
-    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+def run_flask():
+    app.run(host='0.0.0.0', port=8080)
 
-def keep_alive():
-    t = Thread(target=run_web)
-    t.start()
-
-# Handler Utama: Chat Santai & Perintah Natural via AI
+# Handler Pesan Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    
-    # Keamanan Mutlak: Tolak jika bukan kamu!
-    if user_id != ADMIN_USER_ID:
-        await update.message.reply_text("Maaf, kamu tidak memiliki akses ke sistem Izumi.")
+    user_message = update.message.text
+    logging.info(f"Pesan diterima: {user_message}")
+
+    if not model:
+        await update.message.reply_text("Duh, API Key Gemini belum dipasang di Railway nih bos.")
         return
-
-    user_text = update.message.text
-    logging.info(f"Pesan dari Admin: {user_text}")
-
-    # Prompt instruksi dasar untuk Izumi sebagai Asisten Akademik & Pribadi
-    prompt = f"""
-    Kamu adalah Izumi, asisten pribadi AI otonom untuk Ikrimah. 
-    Ikrimah mengajakmu ngobrol atau memberi instruksi terkait jadwal kuliah, tugas, catatan, atau kegiatan sehari-hari.
-    Gunakan bahasa yang santai, akrab, ramah, dan solutif (seperti asisten pribadi profesional).
-    
-    Pesan dari Ikrimah: "{user_text}"
-    """
 
     try:
-        response = model.generate_content(prompt)
+        # Panggilan standar Gemini AI
+        response = model.generate_content(user_message)
         reply_text = response.text
+        await update.message.reply_text(reply_text)
     except Exception as e:
         logging.error(f"Error Gemini API: {e}")
-        reply_text = "Duh, otak AI-ku lagi agak konslet nih boss. Coba ulangi sebentar ya."
-
-    await update.message.reply_text(reply_text)
+        await update.message.reply_text(f"Duh, otak AI-ku error: {str(e)}")
 
 def main():
-    if not TOKEN:
-        logging.error("IZUMI_ACADEMIC_TOKEN belum diset!")
+    token = os.getenv("IZUMI_ACADEMIC_TOKEN")
+    if not token:
+        logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan di environment variables!")
         return
 
-    # Jalankan server keep-alive di background
-    keep_alive()
+    # Jalankan server Flask di background thread agar tidak memblokir bot Telegram
+    t = Thread(target=run_flask)
+    t.daemon = True
+    t.start()
 
-    # Inisialisasi Bot Telegram
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # Tangkap semua pesan teks chat biasa (Tanpa Command Kaku)
+    # Jalankan Bot Telegram
+    application = ApplicationBuilder().token(token).build()
+    
+    # Menerima semua pesan teks
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot sedang berjalan...")
+    logging.info("Izumi Academic Bot mulai melakukan polling...")
     application.run_polling()
 
 if __name__ == '__main__':
