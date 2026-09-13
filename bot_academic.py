@@ -194,30 +194,35 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "jumat": 4, "sabtu": 5, "minggu": 6
     }
     
-    # Deteksi jika user menanyakan hari tertentu
     target_weekday = None
+    day_str_target = ""
     for day_name, d_idx in day_map.items():
         if day_name in msg_lower:
             target_weekday = d_idx
+            day_str_target = day_name.capitalize()
             break
 
     if target_weekday is not None:
         now = datetime.now()
-        days_ahead = target_weekday - now.weekday()
-        if days_ahead < 0:
-            days_ahead += 7
-        target_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        # Ambil jadwal dari hari ini ke depan (mencakup setahun penuh yang ada di database)
+        filtered = []
+        for j in db.get("jadwal", []):
+            try:
+                j_date = datetime.strptime(j.get("tanggal"), "%Y-%m-%d")
+                if j_date.weekday() == target_weekday and j_date.date() >= now.date():
+                    filtered.append(j)
+            except Exception:
+                pass
+
+        filtered = sorted(filtered, key=lambda x: x.get("tanggal", ""))
         
-        # Filter pas tanggalnya
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
-        day_str = [k for k, v in day_map.items() if v == target_weekday][0].capitalize()
-        
-        resp = f"📅 **Jadwal Hari {day_str} ({target_date}):**\n"
+        resp = f"📅 **Daftar Jadwal Hari {day_str_target} (Mendatang):**\n"
         if filtered:
-            for j in sorted(filtered, key=lambda x: x.get("waktu", "")):
-                resp += f"- **{j['nama']}** ({j.get('waktu', '-')})\n"
+            # Batasi tampilkan max 10 agenda terdekat biar chat gak kepanjangan
+            for j in filtered[:10]:
+                resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Tidak ada jadwal kuliah atau agenda tercatat di hari {day_str} ({target_date})."
+            resp += f"Tidak ada jadwal kuliah atau agenda tercatat untuk hari {day_str_target} ke depan."
         await update.message.reply_text(resp)
         return
 
