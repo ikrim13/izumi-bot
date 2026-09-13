@@ -20,37 +20,45 @@ ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?us
 DATA_FILE = "academic_data.json"
 
 def fetch_and_parse_ical():
-    """Mengambil data iCal secara aman."""
+    """Mengambil dan memparsing data iCal secara fleksibel dan aman."""
     jadwal_list = []
     urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
     
     for source_name, url in urls:
         try:
-            response = requests.get(url, timeout=15)
+            logging.info(f"Mengambil iCal dari {source_name}...")
+            response = requests.get(url, timeout=20)
+            logging.info(f"HTTP Status {source_name}: {response.status_code}")
+            
             if response.status_code == 200:
                 cal = Calendar.from_ical(response.content)
-                for component in cal.walk('vevent'):
-                    summary = str(component.get('summary', 'Tanpa Judul'))
-                    dtstart = component.get('dtstart')
-                    
-                    if dtstart:
-                        dt = dtstart.dt
-                        if isinstance(dt, datetime):
-                            tanggal = dt.strftime("%Y-%m-%d")
-                            waktu = dt.strftime("%H:%M")
-                        else:
-                            tanggal = dt.strftime("%Y-%m-%d")
-                            waktu = "Sepanjang Hari"
+                count = 0
+                for component in cal.walk():
+                    if component.name == "VEVENT":
+                        summary = str(component.get('summary', 'Tanpa Judul'))
+                        dtstart = component.get('dtstart')
                         
-                        item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
-                        if item_baru not in jadwal_list:
-                            jadwal_list.append(item_baru)
-                logging.info(f"Berhasil memuat agenda dari {source_name}")
+                        if dtstart:
+                            dt = dtstart.dt
+                            if isinstance(dt, datetime):
+                                tanggal = dt.strftime("%Y-%m-%d")
+                                waktu = dt.strftime("%H:%M")
+                            else:
+                                # Jika all-day event berupa date object
+                                tanggal = dt.strftime("%Y-%m-%d")
+                                waktu = "Sepanjang Hari"
+                            
+                            item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
+                            if item_baru not in jadwal_list:
+                                jadwal_list.append(item_baru)
+                                count += 1
+                logging.info(f"Sukses! Berhasil memuat {count} agenda dari {source_name}")
             else:
-                logging.error(f"Gagal ambil iCal {source_name}, status: {response.status_code}")
+                logging.error(f"Gagal mengambil {source_name}, status: {response.status_code}")
         except Exception as e:
-            logging.error(f"Error parsing iCal {source_name}: {e}")
+            logging.error(f"Error saat parsing iCal {source_name}: {e}")
             
+    logging.info(f"Total keseluruhan jadwal iCal tersinkron: {len(jadwal_list)} item.")
     return jadwal_list
 
 def load_data():
@@ -59,13 +67,13 @@ def load_data():
         try:
             with open(DATA_FILE, "r") as f:
                 data = json.load(f)
-                if initial_jadwal:
-                    manual_items = [j for j in data.get("jadwal", []) if j.get("sumber") == "Manual"]
-                    data["jadwal"] = initial_jadwal + manual_items
-                    save_data(data)
+                # Jika iCal berhasil ditarik, update data iCal tapi pertahankan jadwal manual user
+                manual_items = [j for j in data.get("jadwal", []) if j.get("sumber") == "Manual"]
+                data["jadwal"] = initial_jadwal + manual_items
+                save_data(data)
                 return data
-        except Exception:
-            pass
+        except Exception as e:
+            logging.error(f"Error membaca file JSON lokal: {e}")
             
     data = {"jadwal": initial_jadwal, "tugas": []}
     save_data(data)
@@ -87,7 +95,7 @@ def background_sync_ical():
         save_data(db)
         logging.info("Sinkronisasi iCal berkala selesai.")
 
-# --- FUNGSI CRUD LOKAL YANG BISA DIPANGGIL AI / CHAT ---
+# --- FUNGSI CRUD LOKAL ---
 def tambah_jadwal(nama: str, tanggal: str, waktu: str) -> str:
     """Menambahkan jadwal manual baru ke database."""
     item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "sumber": "Manual"}
@@ -188,7 +196,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # 1. CEK JADWAL BERDASARKAN HARI (Senin - Minggu) SECARA LOKAL (Anti-Limit & Instan)
+    # 1. CEK JADWAL BERDASARKAN HARI (Senin - Minggu) SECARA LOKAL
     day_map = {
         "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
         "jumat": 4, "sabtu": 5, "minggu": 6
@@ -224,7 +232,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    # 2. CEK JADWAL SEMINGGU / HARI INI / BESOK SECARA LOKAL
+    # 2. CEK JADWAL SEMINGGU / HARI INI / BESOK
     if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
@@ -261,7 +269,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    # 3. CHAT UMUM / TAMBAH & HAPUS JADWAL VIA GEMINI (Fungsi Otomatis)
+    # 3. CHAT UMUM / TAMBAH & HAPUS JADWAL VIA GEMINI
     if not model:
         await update.message.reply_text("Duh, API Key Gemini belum dipasang.")
         return
