@@ -105,14 +105,14 @@ def tambah_tugas(nama: str, deadline: str) -> str:
         save_data(db)
         return f"📝 Berhasil nambah tugas: {nama} dengan deadline {deadline}."
     except Exception as e:
-        return f"Format deadline salah. Gunakan format YYYY-MM-DD HH:MM (Contoh: 2026-09-15 23:59)."
+        return f"Format deadline salah. Gunakan format YYYY-MM-DD HH:MM."
 
 def hapus_tugas(nama: str) -> str:
     initial_len = len(db["tugas"])
     db["tugas"] = [t for t in db["tugas"] if nama.lower() not in t["nama"].lower()]
     if len(db["tugas"]) < initial_len:
         save_data(db)
-        return f"🎉 Tugas '{nama}' berhasil dihapus (selesai/dibatalkan)."
+        return f"🎉 Tugas '{nama}' berhasil dihapus."
     return f"❌ Tugas '{nama}' tidak ditemukan."
 
 # Konfigurasi Gemini AI (Opsional untuk obrolan bebas)
@@ -188,6 +188,39 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
+    # PENGATURAN HARI DALAM BAHASA INDONESIA
+    day_map = {
+        "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
+        "jumat": 4, "sabtu": 5, "minggu": 6
+    }
+    
+    # Cek apakah user menanyakan hari tertentu (Contoh: "hari rabu", "matkul rabu", "rabu ada apa")
+    target_weekday = None
+    for day_name, d_idx in day_map.items():
+        if day_name in msg_lower:
+            target_weekday = d_idx
+            break
+
+    if target_weekday is not None:
+        now = datetime.now()
+        # Cari tanggal terdekat untuk hari tersebut dalam minggu ini
+        days_ahead = target_weekday - now.weekday()
+        if days_ahead < 0:
+            days_ahead += 7  # Jika hari tersebut sudah lewat minggu ini, ambil minggu depan
+        target_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
+        
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
+        day_str = [k for k, v in day_map.items() if v == target_weekday][0].capitalize()
+        
+        resp = f"📅 **Jadwal Hari {day_str} ({target_date}):**\n"
+        if filtered:
+            for j in sorted(filtered, key=lambda x: x.get("waktu", "")):
+                resp += f"- **{j['nama']}** ({j.get('waktu', '-')})\n"
+        else:
+            resp += "Tidak ada jadwal kuliah tercatat di hari tersebut."
+        await update.message.reply_text(resp)
+        return
+
     # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI (100% Lokal, Tanpa Kuota AI)
     if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja jadwal", "jadwalnya", "buat 1 minggu"]):
         now = datetime.now()
@@ -251,7 +284,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "🤖 (Mode Hemat Aktif) Otak AI-ku lagi istirahat sebentar karena limit gratis harian tercapai, "
             "tapi **database jadwal, tugas, dan reminder otomatis kamu tetep jalan 100% normal!** "
-            "Ketik 'jadwal' atau 'tugas' kapanpun kamu butuh."
+            "Ketik 'jadwal', 'tugas', atau 'hari rabu' kapanpun kamu butuh."
         )
 
 def main():
