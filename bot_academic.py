@@ -20,15 +20,19 @@ ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?us
 DATA_FILE = "academic_data.json"
 
 def fetch_and_parse_ical():
-    """Mengambil data iCal secara aman."""
+    """Mengambil data iCal secara aman dan menampilkan debug log."""
     jadwal_list = []
     urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
     
     for source_name, url in urls:
         try:
-            response = requests.get(url, timeout=10)
+            logging.info(f"Mencoba mengambil iCal dari {source_name}...")
+            response = requests.get(url, timeout=15)
+            logging.info(f"Status HTTP {source_name}: {response.status_code}")
+            
             if response.status_code == 200:
                 cal = Calendar.from_ical(response.content)
+                count = 0
                 for component in cal.walk('vevent'):
                     summary = str(component.get('summary', 'Tanpa Judul'))
                     dtstart = component.get('dtstart')
@@ -45,23 +49,31 @@ def fetch_and_parse_ical():
                         item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
                         if item_baru not in jadwal_list:
                             jadwal_list.append(item_baru)
-                logging.info(f"Berhasil memuat jadwal dari {source_name}")
+                            count += 1
+                logging.info(f"Sukses! Berhasil memuat {count} agenda dari {source_name}")
             else:
                 logging.error(f"Gagal ambil iCal {source_name}, status: {response.status_code}")
         except Exception as e:
             logging.error(f"Error parsing iCal {source_name}: {e}")
             
+    logging.info(f"Total keseluruhan jadwal tersinkron: {len(jadwal_list)} item.")
     return jadwal_list
 
 def load_data():
+    initial_jadwal = fetch_and_parse_ical()
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                # Jika file lama ada, gabungkan atau update dengan data iCal terbaru
+                if initial_jadwal:
+                    manual_items = [j for j in data.get("jadwal", []) if j.get("sumber") == "Manual"]
+                    data["jadwal"] = initial_jadwal + manual_items
+                    save_data(data)
+                return data
         except Exception:
             pass
             
-    initial_jadwal = fetch_and_parse_ical()
     data = {"jadwal": initial_jadwal, "tugas": []}
     save_data(data)
     return data
@@ -80,9 +92,9 @@ def background_sync_ical():
         manual_items = [j for j in db.get("jadwal", []) if j.get("sumber") == "Manual"]
         db["jadwal"] = live_jadwal + manual_items
         save_data(db)
-        logging.info("Sinkronisasi iCal selesai.")
+        logging.info("Sinkronisasi iCal berkala selesai.")
 
-# --- FUNGSI LOCAL CRUD (Tanpa Kuota AI) ---
+# --- FUNGSI LOCAL CRUD ---
 def tambah_jadwal(nama: str, tanggal: str, waktu: str, ruang: str = "Kampus") -> str:
     item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "ruang": ruang, "sumber": "Manual"}
     db["jadwal"].append(item)
@@ -115,7 +127,7 @@ def hapus_tugas(nama: str) -> str:
         return f"🎉 Tugas '{nama}' berhasil dihapus."
     return f"❌ Tugas '{nama}' tidak ditemukan."
 
-# Konfigurasi Gemini AI (Opsional untuk obrolan bebas)
+# Konfigurasi Gemini AI
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -145,7 +157,6 @@ def check_reminders():
     if not admin_id:
         return
 
-    # Cek Tugas (H-2, H-1, 2 jam sebelum deadline)
     for tugas in list(db.get("tugas", [])):
         if "deadline_obj" in tugas:
             dl_time = datetime.fromisoformat(tugas["deadline_obj"])
@@ -166,7 +177,6 @@ def check_reminders():
                 tugas["notif_2h"] = True
                 save_data(db)
 
-    # Cek Jadwal Kuliah (30 menit sebelum mulai)
     for jadwal in db.get("jadwal", []):
         if jadwal.get("tanggal") == now.strftime("%Y-%m-%d"):
             try:
@@ -188,13 +198,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # PENGATURAN HARI DALAM BAHASA INDONESIA
     day_map = {
         "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
         "jumat": 4, "sabtu": 5, "minggu": 6
     }
     
-    # Cek apakah user menanyakan hari tertentu (Contoh: "hari rabu", "matkul rabu", "rabu ada apa")
     target_weekday = None
     for day_name, d_idx in day_map.items():
         if day_name in msg_lower:
@@ -203,10 +211,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if target_weekday is not None:
         now = datetime.now()
-        # Cari tanggal terdekat untuk hari tersebut dalam minggu ini
         days_ahead = target_weekday - now.weekday()
         if days_ahead < 0:
-            days_ahead += 7  # Jika hari tersebut sudah lewat minggu ini, ambil minggu depan
+            days_ahead += 7
         target_date = (now + timedelta(days=days_ahead)).strftime("%Y-%m-%d")
         
         filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
@@ -217,11 +224,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for j in sorted(filtered, key=lambda x: x.get("waktu", "")):
                 resp += f"- **{j['nama']}** ({j.get('waktu', '-')})\n"
         else:
-            resp += "Tidak ada jadwal kuliah tercatat di hari tersebut."
+            resp += f"Tidak ada jadwal kuliah tercatat di tanggal {target_date}. (Total data di DB: {len(db.get('jadwal', []))} item)"
         await update.message.reply_text(resp)
         return
 
-    # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI (100% Lokal, Tanpa Kuota AI)
+    # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI
     if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja jadwal", "jadwalnya", "buat 1 minggu"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
@@ -239,27 +246,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             for j in filtered:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += "Tidak ada jadwal kuliah atau agenda tercatat dalam 7 hari ke depan."
+            resp += f"Tidak ada jadwal kuliah atau agenda tercatat dalam 7 hari ke depan. (Total data di DB: {len(db.get('jadwal', []))} item)"
         await update.message.reply_text(resp)
         return
 
-    # 2. CEK JADWAL HARI INI / BESOK (100% Lokal, Tanpa Kuota AI)
+    # 2. CEK JADWAL HARI INI / BESOK
     if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower):
         target_date = datetime.now().strftime("%Y-%m-%d")
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db["jadwal"] if j.get("tanggal") == target_date]
+        filtered = [j for j in db.get("jadwal", []] if j.get("tanggal") == target_date]
         resp = f"📅 **Jadwal untuk tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
                 resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += "Tidak ada jadwal tercatat di tanggal ini."
+            resp += f"Tidak ada jadwal tercatat di tanggal ini."
         await update.message.reply_text(resp)
         return
 
-    # 3. LIHAT DAFTAR TUGAS (100% Lokal, Tanpa Kuota AI)
+    # 3. LIHAT DAFTAR TUGAS
     if "tugas" in msg_lower and ("lihat" in msg_lower or "apa" in msg_lower or "daftar" in msg_lower):
         tugas_list = db.get("tugas", [])
         resp = f"📝 **Daftar Tugas Aktif:**\n"
@@ -271,7 +278,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    # 4. OBROLAN UMUM / TUGAS LAINNYA (Menggunakan Gemini dengan Error Handling Aman)
+    # 4. OBROLAN UMUM
     if not model:
         await update.message.reply_text("Duh, API Key Gemini belum dipasang.")
         return
