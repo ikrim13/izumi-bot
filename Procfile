@@ -1,1 +1,1 @@
-web: python bot_academic.py
+worker: python run_all.py
