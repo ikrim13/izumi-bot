@@ -251,7 +251,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
         resp = f"📅 **Jadwal tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
@@ -267,7 +267,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Berikan ringkasan data agar AI tahu konteks saat diajak nambah/hapus
         prompt = f"User bilang: {user_message}. Tanggal hari ini: {datetime.now().strftime('%Y-%m-%d')}."
         chat_session = model.start_chat(enable_automatic_function_calling=True)
         response = chat_session.send_message(prompt)
