@@ -18,10 +18,17 @@ def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                return json.load(f)
+                data = json.load(f)
+                if not data.get("jadwal"):
+                    data["jadwal"] = get_initial_semester3_schedule()
+                    save_data(data)
+                return data
         except Exception:
             pass
-    return {"jadwal": [], "tugas": []}
+            
+    initial_data = {"jadwal": get_initial_semester3_schedule(), "tugas": []}
+    save_data(initial_data)
+    return initial_data
 
 def save_data(data):
     with open(DATA_FILE, "w") as f:
@@ -29,43 +36,58 @@ def save_data(data):
 
 db = load_data()
 
-# --- HELPER MAPPING HARI ---
 day_map_full = {
     "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
     "jumat": 4, "sabtu": 5, "minggu": 6
 }
 
-def generate_recurring_schedule(nama: str, target_weekday: int, waktu: str):
-    """Otomatis generate jadwal rutin untuk 1 tahun ke depan berdasarkan hari dalam seminggu."""
+def get_initial_semester3_schedule():
+    raw_courses = [
+        # SENIN
+        {"nama": "Manajemen Keuangan", "weekday": 0, "waktu": "13.00-14.20", "ruang": "R. 3.7"},
+        # SELASA (Sesuai request: pindah dari senin, sesi 2 jam 10.15 di ruang 3.4)
+        {"nama": "Kuliah Sesi 2", "weekday": 1, "waktu": "10.15", "ruang": "R. 3.4"},
+        {"nama": "Aplikasi Komputer", "weekday": 1, "waktu": "13.00-15.00", "ruang": "Lab E.2.1"},
+        # RABU
+        {"nama": "Bahasa Indonesia & TPI", "weekday": 2, "waktu": "07.30-08.50", "ruang": "R. 3.2"},
+        {"nama": "Lalu Lintas Pembayaran", "weekday": 2, "waktu": "10.00-11.20", "ruang": "R. 3.13"},
+        {"nama": "Prak. Manajemen Keuangan", "weekday": 2, "waktu": "13.00-15.00", "ruang": "R. 3.11"},
+        {"nama": "Metodologi Penelitian", "weekday": 2, "waktu": "15.15-16.35", "ruang": "R. 1.3"},
+        # KAMIS
+        {"nama": "Prak. Lalu Lintas Pembayaran", "weekday": 3, "waktu": "07.30-09.30", "ruang": "R. 3.1"},
+        {"nama": "Kewirausahaan", "weekday": 3, "waktu": "10.00-11.20", "ruang": "R. 2.6"},
+        {"nama": "Prak. Kewirausahaan", "weekday": 3, "waktu": "13.00-15.00", "ruang": "R. 2.6"},
+        {"nama": "Ilmu Ekonomi", "weekday": 3, "waktu": "15.15-17.15", "ruang": "R. 1.1"},
+        # JUMAT
+        {"nama": "Tugas Besar II", "weekday": 4, "waktu": "13.00-15.00", "ruang": "Lab E.2.1"},
+        {"nama": "Tugas Besar II (Sesi 2)", "weekday": 4, "waktu": "15.15-17.15", "ruang": "Lab E.2.1"}
+    ]
+
+    generated_list = []
     now = datetime.now()
-    # Cari tanggal terdekat untuk hari tersebut
-    days_ahead = target_weekday - now.weekday()
-    if days_ahead < 0:
-        days_ahead += 7
-    
-    start_date = now + timedelta(days=days_ahead)
-    
-    # Generate selama 52 minggu (1 tahun)
-    added_count = 0
-    for i in range(52):
-        current_date = start_date + timedelta(weeks=i)
-        date_str = current_date.strftime("%Y-%m-%d")
-        
-        # Cek apakah sudah ada di database supaya tidak duplikat
-        exists = any(j['nama'].lower() == nama.lower() and j['tanggal'] == date_str for j in db["jadwal"])
-        if not exists:
-            item = {"nama": nama, "tanggal": date_str, "waktu": waktu, "sumber": "Rutin"}
-            db["jadwal"].append(item)
-            added_count += 1
-            
-    save_data(db)
-    day_name = list(day_map_full.keys())[list(day_map_full.values()).index(target_weekday)].capitalize()
-    return f"Sip! Jadwal rutin **{nama}** setiap hari **{day_name}** pukul **{waktu}** sudah otomatis dibuat untuk 1 tahun ke depan ({added_count} sesi dicatat)."
+
+    for course in raw_courses:
+        target_weekday = course["weekday"]
+        days_ahead = target_weekday - now.weekday()
+        if days_ahead < 0:
+            days_ahead += 7
+        start_date = now + timedelta(days=days_ahead)
+
+        for i in range(52):
+            current_date = start_date + timedelta(weeks=i)
+            date_str = current_date.strftime("%Y-%m-%d")
+            item = {
+                "nama": f"{course['nama']} ({course['ruang']})",
+                "tanggal": date_str,
+                "waktu": course["waktu"],
+                "sumber": "Semester 3"
+            }
+            generated_list.append(item)
+
+    return generated_list
 
 def parse_natural_add(text):
     text_lower = text.lower()
-    
-    # Deteksi apakah ini jadwal rutin mingguan (mengandung kata "setiap")
     is_recurring = "setiap" in text_lower
     
     target_weekday = None
@@ -74,7 +96,6 @@ def parse_natural_add(text):
             target_weekday = d_idx
             break
             
-    # Cari waktu (HH:MM atau jam X)
     match_time = re.search(r'(\d{1,2})[:\.](\d{2})', text)
     if match_time:
         waktu = f"{int(match_time.group(1)):02d}:{match_time.group(2)}"
@@ -85,11 +106,9 @@ def parse_natural_add(text):
         else:
             waktu = "08:00"
             
-    # Cari tanggal spesifik jika ada (YYYY-MM-DD)
     match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
     tanggal = match_date.group(0) if match_date else None
 
-    # Bersihkan teks untuk nama kegiatan
     clean_text = text
     for w in ["setiap", "tambahin", "tambah", "jadwal", "tolong", "buatkan", "agenda", "buat", "hari"]:
         clean_text = re.sub(w, '', clean_text, flags=re.IGNORECASE)
@@ -105,55 +124,92 @@ def parse_natural_add(text):
     nama_kegiatan = clean_text.capitalize() if clean_text else "Kegiatan"
 
     if is_recurring and target_weekday is not None:
-        return generate_recurring_schedule(nama_kegiatan, target_weekday, waktu)
+        now = datetime.now()
+        days_ahead = target_weekday - now.weekday()
+        if days_ahead < 0:
+            days_ahead += 7
+        start_date = now + timedelta(days=days_ahead)
+        
+        added_count = 0
+        for i in range(52):
+            current_date = start_date + timedelta(weeks=i)
+            date_str = current_date.strftime("%Y-%m-%d")
+            item = {"nama": nama_kegiatan, "tanggal": date_str, "waktu": waktu, "sumber": "Chat"}
+            db["jadwal"].append(item)
+            added_count += 1
+        save_data(db)
+        return f"Sip! Jadwal rutin **{nama_kegiatan}** berhasil ditambahkan untuk 1 tahun ke depan."
     else:
-        # Jadwal sekali jalan (single date)
         tgl_final = tanggal if tanggal else datetime.now().strftime("%Y-%m-%d")
         item = {"nama": nama_kegiatan, "tanggal": tgl_final, "waktu": waktu, "sumber": "Chat"}
         db["jadwal"].append(item)
         save_data(db)
-        return f"Sip, udah aku catat ya:\n📌 **{nama_kegiatan}**\n📅 {tgl_final} | ⏰ Pukul {waktu}"
+        return f"Sip, udah dicatat:\n📌 **{nama_kegiatan}**\n📅 {tgl_final} | ⏰ {waktu}"
 
 def hapus_jadwal_lokal(text: str) -> str:
     text_lower = text.lower()
     
-    # Cari tanggal spesifik jika user mau hapus di tanggal tertentu doang
+    # Cek apakah user ingin menghapus seluruh jadwal berdasarkan hari tertentu (misal: "hapus semua jadwal di hari minggu")
+    target_weekday = None
+    for day_name, d_idx in day_map_full.items():
+        if f"hari {day_name}" in text_lower or day_name in text_lower:
+            # Pastikan bukan nama mata kuliah, tapi merujuk ke hari
+            if any(k in text_lower for k in [f"hari {day_name}", f"di {day_name}", f"pada {day_name}"]):
+                target_weekday = d_idx
+                break
+
+    if target_weekday is not None:
+        initial_len = len(db["jadwal"])
+        day_name_str = list(day_map_full.keys())[list(day_map_full.values()).index(target_weekday)].capitalize()
+        
+        # Hapus jadwal yang jatuh pada hari tersebut
+        filtered_list = []
+        for j in db["jadwal"]:
+            try:
+                j_date = datetime.strptime(j.get("tanggal"), "%Y-%m-%d")
+                if j_date.weekday() != target_weekday:
+                    filtered_list.append(j)
+            except Exception:
+                filtered_list.append(j)
+                
+        db["jadwal"] = filtered_list
+        save_data(db)
+        removed_count = initial_len - len(db["jadwal"])
+        return f"🗑️ Berhasil menghapus {removed_count} sesi jadwal di hari **{day_name_str}**!"
+
+    # Penghapusan biasa berdasarkan keyword nama kegiatan atau tanggal
     match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
     target_date = match_date.group(0) if match_date else None
     
-    # Ambil keyword nama kegiatan
     keyword = text_lower
-    for w in ["hapus", "jadwal", "tolong", "batalkan", "buang", "tanggal"]:
+    for w in ["hapus", "jadwal", "tolong", "batalkan", "buang", "tanggal", "semua"]:
         keyword = keyword.replace(w, "")
     if target_date:
         keyword = keyword.replace(target_date, "")
     keyword = keyword.strip(" ,.-")
     
     if not keyword:
-        return "Mau hapus jadwal apa nih? Coba sebutkan nama kegiatannya."
+        return "Mau hapus jadwal apa nih?"
 
     initial_len = len(db["jadwal"])
-    
     if target_date:
-        # Hapus hanya pada tanggal tertentu saja
         db["jadwal"] = [j for j in db["jadwal"] if not (keyword in j["nama"].lower() and j["tanggal"] == target_date)]
-        msg = f"Oke, jadwal '{keyword}' pada tanggal {target_date} berhasil dihapus."
+        msg = f"Oke, jadwal '{keyword}' pada tanggal {target_date} dihapus."
     else:
-        # Hapus semua dari seluruh tanggal
         db["jadwal"] = [j for j in db["jadwal"] if keyword not in j["nama"].lower()]
-        msg = f"Oke, semua jadwal dengan kata kunci '{keyword}' berhasil dihapus dari daftar."
+        msg = f"Oke, semua jadwal dengan kata kunci '{keyword}' dihapus."
         
     if len(db["jadwal"]) < initial_len:
         save_data(db)
         return msg
-    return f"Duh, gak nemu jadwal dengan kata kunci '{keyword}'{f' pada tanggal {target_date}' if target_date else ''}."
+    return f"Gak nemu jadwal dengan kata kunci '{keyword}'."
 
 # Flask Keep-Alive Server (Port 8080)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Recurring Schedule Mode) is running!"
+    return "Izumi Academic Bot (Smart Delete Mode) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -170,16 +226,15 @@ def check_reminders():
     if not admin_id:
         return
 
-    # Cek reminder 30 menit sebelum jadwal
     for jadwal in db.get("jadwal", []):
         if jadwal.get("tanggal") == now.strftime("%Y-%m-%d"):
             waktu_str = jadwal.get("waktu", "")
-            if ":" in waktu_str and len(waktu_str) == 5:
+            time_part = waktu_str.split("-")[0].replace(".", ":").strip()
+            if len(time_part) == 5 and ":" in time_part:
                 try:
-                    kuliah_time = datetime.strptime(f"{jadwal['tanggal']} {waktu_str}", "%Y-%m-%d %H:%M")
+                    kuliah_time = datetime.strptime(f"{jadwal['tanggal']} {time_part}", "%Y-%m-%d %H:%M")
                     diff = kuliah_time - now
                     
-                    # Jika sisa waktu antara 28 sampai 32 menit lagi dan belum pernah dinotifikasi
                     if timedelta(minutes=28) <= diff <= timedelta(minutes=32) and not jadwal.get("notif_30m"):
                         telegram_app.bot.send_message(
                             chat_id=admin_id, 
@@ -195,19 +250,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # 1. TAMBAH JADWAL (Rutin atau Sekali)
-    if any(k in msg_lower for k in ["tambahin", "tambah", "setiap", "buatkan jadwal", "ada jadwal baru"]):
+    if any(k in msg_lower for k in ["tambahin", "tambah", "setiap", "buatkan jadwal"]):
         res = parse_natural_add(user_message)
         await update.message.reply_text(res)
         return
 
-    # 2. HAPUS JADWAL (Semua atau Tanggal Tertentu)
     if any(k in msg_lower for k in ["hapus", "batalkan", "buang jadwal"]):
         res = hapus_jadwal_lokal(user_message)
         await update.message.reply_text(res)
         return
 
-    # 3. CEK JADWAL BERDASARKAN HARI (Senin - Minggu)
     target_weekday = None
     day_str_target = ""
     for day_name, d_idx in day_map_full.items():
@@ -229,17 +281,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         filtered = sorted(filtered, key=lambda x: (x.get("tanggal", ""), x.get("waktu", "")))
         
-        resp = f"📅 **Jadwal Hari {day_str_target} (Mendatang):**\n"
         if filtered:
-            for j in filtered[:15]:
-                resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
+            target_date_str = filtered[0].get('tanggal')
+            todays_sessions = [j for j in filtered if j.get('tanggal') == target_date_str]
+            
+            resp = f"📅 **Jadwal Hari {day_str_target} ({target_date_str}):**\n"
+            for j in todays_sessions:
+                resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan."
+            resp = f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan."
         await update.message.reply_text(resp)
         return
 
-    # 4. CEK JADWAL SEMINGGU / HARI INI / BESOK
-    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu"]):
+    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
         filtered = []
@@ -253,7 +307,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         filtered = sorted(filtered, key=lambda x: (x.get("tanggal", ""), x.get("waktu", "")))
         resp = f"📅 **Jadwal 7 Hari ke Depan:**\n"
         if filtered:
-            for j in filtered:
+            for j in filtered[:12]:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
             resp += "Aman, gak ada jadwal dalam 7 hari ke depan."
@@ -265,30 +319,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
         resp = f"📅 **Jadwal tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
                 resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
         else:
-            resp += "Nggak ada jadwal di tanggal ini. Kosong!"
+            resp += "Nggak ada jadwal di tanggal ini."
         await update.message.reply_text(resp)
         return
 
-    # 5. PANDUAN / FALLBACK
     await update.message.reply_text(
-        "🤖 Halo Ikrimah! Bot siap jalan:\n"
-        "- Cek jadwal: Ketik nama hari (misal: `rabu`, `kamis`).\n"
-        "- Tambah rutin: *'Setiap hari Rabu jam 13:00 kuliah Algoritma'*.\n"
-        "- Hapus permanen: *'Hapus jadwal Algoritma'*.\n"
-        "- Hapus tanggal tertentu: *'Hapus jadwal Algoritma tanggal 2026-09-16'*."
+        "🤖 Halo Ikrimah! Jadwal Semester 3 PNJ Akuntansi sudah diperbarui:\n"
+        "- Ketik nama hari (misal: `senin`, `selasa`, `rabu`, dll) buat cek jadwal.\n"
+        "- Sekarang bot juga bisa hapus jadwal per hari (contoh: *'hapus semua jadwal di hari minggu'*)."
     )
 
 def main():
     global telegram_app
     token = os.getenv("IZUMI_ACADEMIC_TOKEN")
     if not token:
-        logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan!")
+        logging.error("IZUMI_ACADIAN_TOKEN tidak ditemukan!")
         return
 
     t = Thread(target=run_flask)
@@ -304,8 +355,11 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Recurring Schedule Mode) berjalan...")
+    logging.info("Izumi Academic Bot (Smart Delete Mode) berjalan...")
     application.run_polling()
+
+if __name__ =='.main__':
+    main()
 
 if __name__ == '__main__':
     main()
