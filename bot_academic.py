@@ -45,7 +45,7 @@ def get_initial_semester3_schedule():
     raw_courses = [
         # SENIN
         {"nama": "Manajemen Keuangan", "weekday": 0, "waktu": "13.00-14.20", "ruang": "R. 3.7"},
-        # SELASA (Sesuai request: pindah dari senin, sesi 2 jam 10.15 di ruang 3.4)
+        # SELASA (Sesuai request: sesi 2 jam 10.15 di ruang 3.4)
         {"nama": "Kuliah Sesi 2", "weekday": 1, "waktu": "10.15", "ruang": "R. 3.4"},
         {"nama": "Aplikasi Komputer", "weekday": 1, "waktu": "13.00-15.00", "ruang": "Lab E.2.1"},
         # RABU
@@ -149,11 +149,9 @@ def parse_natural_add(text):
 def hapus_jadwal_lokal(text: str) -> str:
     text_lower = text.lower()
     
-    # Cek apakah user ingin menghapus seluruh jadwal berdasarkan hari tertentu (misal: "hapus semua jadwal di hari minggu")
     target_weekday = None
     for day_name, d_idx in day_map_full.items():
         if f"hari {day_name}" in text_lower or day_name in text_lower:
-            # Pastikan bukan nama mata kuliah, tapi merujuk ke hari
             if any(k in text_lower for k in [f"hari {day_name}", f"di {day_name}", f"pada {day_name}"]):
                 target_weekday = d_idx
                 break
@@ -162,7 +160,6 @@ def hapus_jadwal_lokal(text: str) -> str:
         initial_len = len(db["jadwal"])
         day_name_str = list(day_map_full.keys())[list(day_map_full.values()).index(target_weekday)].capitalize()
         
-        # Hapus jadwal yang jatuh pada hari tersebut
         filtered_list = []
         for j in db["jadwal"]:
             try:
@@ -177,7 +174,6 @@ def hapus_jadwal_lokal(text: str) -> str:
         removed_count = initial_len - len(db["jadwal"])
         return f"🗑️ Berhasil menghapus {removed_count} sesi jadwal di hari **{day_name_str}**!"
 
-    # Penghapusan biasa berdasarkan keyword nama kegiatan atau tanggal
     match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
     target_date = match_date.group(0) if match_date else None
     
@@ -319,7 +315,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
         resp = f"📅 **Jadwal tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
@@ -332,14 +328,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "🤖 Halo Ikrimah! Jadwal Semester 3 PNJ Akuntansi sudah diperbarui:\n"
         "- Ketik nama hari (misal: `senin`, `selasa`, `rabu`, dll) buat cek jadwal.\n"
-        "- Sekarang bot juga bisa hapus jadwal per hari (contoh: *'hapus semua jadwal di hari minggu'*)."
+        "- Bot juga bisa hapus jadwal per hari (contoh: *'hapus semua jadwal di hari minggu'*)."
     )
 
 def main():
     global telegram_app
     token = os.getenv("IZUMI_ACADEMIC_TOKEN")
     if not token:
-        logging.error("IZUMI_ACADIAN_TOKEN tidak ditemukan!")
+        logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan!")
         return
 
     t = Thread(target=run_flask)
@@ -357,9 +353,6 @@ def main():
 
     logging.info("Izumi Academic Bot (Smart Delete Mode) berjalan...")
     application.run_polling()
-
-if __name__ =='.main__':
-    main()
 
 if __name__ == '__main__':
     main()
