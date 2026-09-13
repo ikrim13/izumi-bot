@@ -65,7 +65,6 @@ def load_data():
         try:
             with open(DATA_FILE, "r") as f:
                 data = json.load(f)
-                # Jika file lama ada, gabungkan atau update dengan data iCal terbaru
                 if initial_jadwal:
                     manual_items = [j for j in data.get("jadwal", []) if j.get("sumber") == "Manual"]
                     data["jadwal"] = initial_jadwal + manual_items
@@ -256,7 +255,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
         
-        filtered = [j for j in db.get("jadwal", []] if j.get("tanggal") == target_date]
+        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal") == target_date]
         resp = f"📅 **Jadwal untuk tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
