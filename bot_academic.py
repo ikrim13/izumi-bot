@@ -1,332 +1,84 @@
 import os
-import json
 import logging
-import requests
-from icalendar import Calendar
-from datetime import datetime, timedelta, time
-from zoneinfo import ZoneInfo
+from datetime import datetime
+from flask import Flask
+from threading import Thread
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
+import google.generativeai as genai
 
-ACADEMIC_TOKEN = os.getenv("IZUMI_ACADEMIC_TOKEN")
-TARGET_GROUP_ID = os.getenv("TARGET_GROUP_ID")
-ICAL_URL = os.getenv("ICAL_URL")
+# Konfigurasi Logging
+logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Ambil Variabel Lingkungan (Environment Variables)
+TOKEN = os.getenv("IZUMI_ACADEMIC_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "8791729948"))
 
-STORAGE_FILE = "storage_data.json"
+# Konfigurasi Gemini AI
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel('gemini-1.5-flash')
 
-def load_data():
-    if os.path.exists(STORAGE_FILE):
-        try:
-            with open(STORAGE_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            pass
-    return {
-        "archive": {},
-        "notified_logs": [],
-        "notified_classes": []
-    }
+# Flask App Sederhana untuk UptimeRobot (Anti-Tidur Railway)
+app = Flask('')
 
-def save_data(data):
+@app.route('/')
+def home():
+    return "Izumi Academic Bot is alive and running 24/7!"
+
+def run_web():
+    app.run(host='0.0.0.0', port=int(os.environ.get("PORT", 8080)))
+
+def keep_alive():
+    t = Thread(target=run_web)
+    t.start()
+
+# Handler Utama: Chat Santai & Perintah Natural via AI
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    
+    # Keamanan Mutlak: Tolak jika bukan kamu!
+    if user_id != ADMIN_USER_ID:
+        await update.message.reply_text("Maaf, kamu tidak memiliki akses ke sistem Izumi.")
+        return
+
+    user_text = update.message.text
+    logging.info(f"Pesan dari Admin: {user_text}")
+
+    # Prompt instruksi dasar untuk Izumi sebagai Asisten Akademik & Pribadi
+    prompt = f"""
+    Kamu adalah Izumi, asisten pribadi AI otonom untuk Ikrimah. 
+    Ikrimah mengajakmu ngobrol atau memberi instruksi terkait jadwal kuliah, tugas, catatan, atau kegiatan sehari-hari.
+    Gunakan bahasa yang santai, akrab, ramah, dan solutif (seperti asisten pribadi profesional).
+    
+    Pesan dari Ikrimah: "{user_text}"
+    """
+
     try:
-        with open(STORAGE_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
+        response = model.generate_content(prompt)
+        reply_text = response.text
     except Exception as e:
-        logging.error(f"Gagal save data: {e}")
+        logging.error(f"Error Gemini API: {e}")
+        reply_text = "Duh, otak AI-ku lagi agak konslet nih boss. Coba ulangi sebentar ya."
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "📚 [Academic Bot] Modul akademik & kalender aktif.\n\n"
-        "Perintah manual:\n"
-        "- `/jadwal` : Lihat jadwal/kegiatan kalender terdekat\n"
-        "- `/besok` : Cek jadwal & kegiatan untuk besok\n"
-        "- `/minggu` : Cek jadwal & kegiatan 7 hari ke depan\n"
-        "- `/tugas` : Cek daftar tugas/deadline terbaru"
-    )
-
-async def jadwal(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengambil jadwal dan kegiatan dari Kalender...")
-    events = fetch_calendar_events()
-    
-    if not events:
-        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan ditemukan di kalender.")
-        return
-
-    text = "📅 **Jadwal & Kegiatan Kalender Terkini:**\n"
-    for i, (title, dt) in enumerate(events[:15], 1):
-        formatted_date = dt.strftime("%d %b %Y, %H:%M")
-        text += f"\n{i}. **{title}**\n   ⏰ {formatted_date}"
-        
-    await update.message.reply_text(text)
-
-async def besok(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengecek jadwal untuk besok...")
-    events = fetch_calendar_events()
-    
-    if not events:
-        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan di kalender.")
-        return
-
-    tomorrow = datetime.now().date() + timedelta(days=1)
-    
-    tomorrow_events = []
-    for title, dt in events:
-        if dt.date() == tomorrow:
-            tomorrow_events.append((title, dt))
-
-    if not tomorrow_events:
-        await update.message.reply_text(f"🎉 Santai! Tidak ada jadwal kuliah atau tugas untuk besok ({tomorrow.strftime('%d %b %Y')}).")
-        return
-
-    text = f"📅 **Jadwal & Kegiatan Besok ({tomorrow.strftime('%d %b %Y')}):**\n"
-    for i, (title, dt) in enumerate(tomorrow_events, 1):
-        formatted_time = dt.strftime("%H:%M")
-        text += f"\n{i}. **{title}**\n   ⏰ Pukul {formatted_time}"
-        
-    await update.message.reply_text(text)
-
-async def minggu(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengambil jadwal dan kegiatan untuk 7 hari ke depan...")
-    events = fetch_calendar_events()
-    
-    if not events:
-        await update.message.reply_text("🎉 Tidak ada jadwal atau kegiatan ditemukan di kalender.")
-        return
-
-    now = datetime.now()
-    one_week_later = now + timedelta(days=7)
-    
-    week_events = []
-    for title, dt in events:
-        if now <= dt <= one_week_later:
-            week_events.append((title, dt))
-
-    if not week_events:
-        await update.message.reply_text("🎉 Santai! Tidak ada jadwal kuliah atau tugas untuk 7 hari ke depan.")
-        return
-
-    text = "📅 **Jadwal & Kegiatan 7 Hari ke Depan:**\n"
-    for i, (title, dt) in enumerate(week_events, 1):
-        formatted_date = dt.strftime("%d %b %Y, %H:%M")
-        text += f"\n{i}. **{title}**\n   ⏰ {formatted_date}"
-        
-    await update.message.reply_text(text)
-
-async def tugas(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🔄 Sedang mengambil data deadline tugas dari Kalender...")
-    events = fetch_calendar_events()
-    
-    keywords_deadline = ["deadline", "tenggat", "due date"]
-    
-    deadline_events = []
-    for title, dt in events:
-        t_lower = title.lower()
-        if any(kw in t_lower for kw in keywords_deadline):
-            deadline_events.append((title, dt))
-    
-    if not deadline_events:
-        await update.message.reply_text("🎉 Tidak ada deadline tugas aktif saat ini di kalender.")
-        return
-
-    text = "📝 **Daftar Tugas & Deadline Terdekat:**\n"
-    for i, (title, dt) in enumerate(deadline_events[:10], 1):
-        formatted_date = dt.strftime("%d %b %Y, %H:%M")
-        text += f"\n{i}. **{title}**\n   ⏰ Deadline: {formatted_date}"
-        
-    await update.message.reply_text(text)
-
-def fetch_calendar_events():
-    try:
-        response = requests.get(ICAL_URL, timeout=10)
-        if response.status_code != 200:
-            return []
-
-        cal = Calendar.from_ical(response.content)
-        events = []
-        wib_zone = ZoneInfo("Asia/Jakarta")
-        
-        for component in cal.walk('vevent'):
-            summary = component.get('summary')
-            dt_start = component.get('dtstart')
-            
-            if summary and dt_start:
-                date_time = dt_start.dt
-                if isinstance(date_time, datetime):
-                    if date_time.tzinfo is not None:
-                        date_time = date_time.astimezone(wib_zone).replace(tzinfo=None)
-                    else:
-                        date_time = date_time.replace(tzinfo=ZoneInfo("UTC")).astimezone(wib_zone).replace(tzinfo=None)
-                    events.append((str(summary), date_time))
-                elif isinstance(date_time, type(datetime.now().date())):
-                    date_time = datetime.combine(date_time, time(0, 0))
-                    events.append((str(summary), date_time))
-                    
-        events.sort(key=lambda x: x[1])
-        return events
-    except Exception as e:
-        logging.error(f"Error fetching ical: {e}")
-        return []
-
-# --- JOB QUEUE OTOMATIS ---
-async def job_daily_schedule(context: ContextTypes.DEFAULT_TYPE):
-    if not TARGET_GROUP_ID:
-        return
-    
-    days_map = {"Monday": "Senin", "Tuesday": "Selasa", "Wednesday": "Rabu", "Thursday": "Kamis", "Friday": "Jumat", "Saturday": "Sabtu", "Sunday": "Minggu"}
-    today_en = datetime.now().strftime("%A")
-    today_id = days_map.get(today_en, "Senin")
-
-    events = fetch_calendar_events()
-    today_date = datetime.now().date()
-    
-    # Ambil judul beserta jamnya (mirip kayak perintah /besok)
-    todays_events = [(title, dt) for title, dt in events if dt.date() == today_date]
-
-    text = f"☀️ **Selamat Pagi!**\n📅 Jadwal & Kegiatan Hari Ini (**{today_id}**):\n"
-    if todays_events:
-        for title, dt in todays_events:
-            time_str = dt.strftime("%H:%M")
-            text += f"• **{title}**\n  ⏰ Pukul {time_str}\n"
-    else:
-        text += "• Tidak ada jadwal kuliah atau kegiatan hari ini.\n"
-
-    await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=text, parse_mode="Markdown")
-
-async def job_check_class_reminder(context: ContextTypes.DEFAULT_TYPE):
-    if not TARGET_GROUP_ID:
-        return
-
-    events = fetch_calendar_events()
-    if not events:
-        return
-
-    now = datetime.now()
-    data = load_data()
-    if "notified_classes" not in data:
-        data["notified_classes"] = []
-
-    keywords_deadline = ["deadline", "tenggat", "due date"]
-
-    for title, dt in events:
-        t_lower = title.lower()
-        if any(kw in t_lower for kw in keywords_deadline):
-            continue
-
-        diff = dt - now
-        total_seconds = diff.total_seconds()
-
-        if 0 <= total_seconds <= 1800:
-            unique_key = f"{title}_{dt.strftime('%Y%m%d%H%M')}"
-            
-            if unique_key not in data["notified_classes"]:
-                msg = (
-                    f"🔔 **PENGINGAT KEGIATAN (30 MENIT LAGI)**\n\n"
-                    f"📖 Kegiatan: **{title}**\n"
-                    f"⏰ Waktu: {dt.strftime('%H:%M')}\n\n"
-                    f"Ayo bersiap-siap!"
-                )
-                await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=msg)
-                
-                data["notified_classes"].append(unique_key)
-                if len(data["notified_classes"]) > 50:
-                    data["notified_classes"] = data["notified_classes"][-30:]
-                save_data(data)
-
-async def job_check_deadlines(context: ContextTypes.DEFAULT_TYPE):
-    if not TARGET_GROUP_ID:
-        return
-
-    events = fetch_calendar_events()
-    if not events:
-        return
-
-    keywords_deadline = ["deadline", "tenggat", "due date"]
-    deadline_events = []
-    for title, dt in events:
-        t_lower = title.lower()
-        if any(kw in t_lower for kw in keywords_deadline):
-            deadline_events.append((title, dt))
-
-    now = datetime.now()
-    data = load_data()
-    if "notified_logs" not in data:
-        data["notified_logs"] = []
-
-    for title, dt in deadline_events:
-        diff = dt - now
-        total_seconds = diff.total_seconds()
-
-        if total_seconds < 0:
-            continue
-
-        intervals = [
-            (86400, "⚠️ **PENGINGAT DEADLINE (H-1)**"),
-            (10800, "⚠️ **PENGINGAT DEADLINE (3 JAM LAGI!)**"),
-            (1800, "🚨 **PERINGATAN KRITIS (30 MENIT LAGI!)**")
-        ]
-
-        for limit_sec, label in intervals:
-            if abs(total_seconds - limit_sec) <= 300:
-                unique_key = f"{title}_{limit_sec}_{dt.strftime('%Y%m%d%H%M')}"
-                
-                if unique_key not in data["notified_logs"]:
-                    msg = (
-                        f"{label}\n\n"
-                        f"📝 Tugas: **{title}**\n"
-                        f"⏰ Waktu Deadline: {dt.strftime('%d %b %Y, %H:%M')}"
-                    )
-                    await context.bot.send_message(chat_id=TARGET_GROUP_ID, text=msg)
-                    
-                    data["notified_logs"].append(unique_key)
-                    if len(data["notified_logs"]) > 100:
-                        data["notified_logs"] = data["notified_logs"][-50:]
-                    save_data(data)
-
-# --- AUTO LAUNCH COMPANION BOTS ---
-import threading
-import subprocess
-import sys
-
-def launch_companions():
-    companions = ["bot_archive.py", "bot_command.py", "bot_nexus.py"]
-    for comp in companions:
-        if os.path.exists(comp):
-            def run_script(filename):
-                try:
-                    subprocess.run([sys.executable, filename])
-                except Exception as e:
-                    logging.error(f"Gagal menjalankan {filename}: {e}")
-            
-            t = threading.Thread(target=run_script, args=(comp,))
-            t.daemon = True
-            t.start()
-            logging.info(f"Berhasil mentrigger thread untuk: {comp}")
+    await update.message.reply_text(reply_text)
 
 def main():
-    if not ACADEMIC_TOKEN:
-        logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan!")
+    if not TOKEN:
+        logging.error("IZUMI_ACADEMIC_TOKEN belum diset!")
         return
-    
-    # Jalankan bot-bot lain di background thread
-    launch_companions()
 
-    app = Application.builder().token(ACADEMIC_TOKEN).build()
-    
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("jadwal", jadwal))
-    app.add_handler(CommandHandler("besok", besok))
-    app.add_handler(CommandHandler("minggu", minggu))
-    app.add_handler(CommandHandler("tugas", tugas))
-    
-    job_queue = app.job_queue
-    job_queue.run_daily(job_daily_schedule, time=time(hour=7, minute=0, tzinfo=ZoneInfo("Asia/Jakarta")))
-    job_queue.run_repeating(job_check_class_reminder, interval=300, first=15)
-    job_queue.run_repeating(job_check_deadlines, interval=300, first=10)
+    # Jalankan server keep-alive di background
+    keep_alive()
 
-    print("Academic Bot & Companion Bots sedang berjalan...")
-    app.run_polling(drop_pending_updates=True)
+    # Inisialisasi Bot Telegram
+    application = ApplicationBuilder().token(TOKEN).build()
 
-if __name__ == "__main__":
+    # Tangkap semua pesan teks chat biasa (Tanpa Command Kaku)
+    application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+    logging.info("Izumi Academic Bot sedang berjalan...")
+    application.run_polling()
+
+if __name__ == '__main__':
     main()
