@@ -35,14 +35,14 @@ def save_data(data):
 
 db = load_data()
 
-# --- FUNGSI TOOLS (Bisa dipanggil otomatis oleh Gemini lewat chat santai) ---
+# --- FUNGSI TOOLS ---
 
 def tambah_jadwal(nama: str, hari: str, waktu: str, ruang: str = "Kampus", tanggal: str = "") -> str:
     """Menambahkan jadwal kuliah baru ke database."""
     item = {"nama": nama, "hari": hari, "waktu": waktu, "ruang": ruang, "tanggal": tanggal}
     db["jadwal"].append(item)
     save_data(db)
-    return f"Berhasil nambah jadwal: {nama} hari {hari} pukul {waktu} di {ruang}."
+    return f"Berhasil nambah jadwal: {nama} hari {hari} ({tanggal}) pukul {waktu} di {ruang}."
 
 def hapus_jadwal(nama: str) -> str:
     """Menghapus jadwal kuliah berdasarkan nama mata kuliah."""
@@ -54,7 +54,7 @@ def hapus_jadwal(nama: str) -> str:
     return f"Jadwal dengan nama '{nama}' tidak ditemukan."
 
 def tambah_tugas(nama: str, deadline: str) -> str:
-    """Menambahkan tugas baru dengan format deadline (misal: 2026-09-15 23:59)."""
+    """Menambahkan tugas baru dengan format deadline (YYYY-MM-DD HH:MM)."""
     try:
         dl_obj = datetime.strptime(deadline, "%Y-%m-%d %H:%M")
         item = {"nama": nama, "deadline": deadline, "deadline_obj": dl_obj.isoformat()}
@@ -73,7 +73,6 @@ def hapus_tugas(nama: str) -> str:
         return f"Tugas '{nama}' berhasil dihapus (selesai/dibatalkan)."
     return f"Tugas dengan nama '{nama}' tidak ditemukan."
 
-# Daftar fungsi yang bisa diakses Gemini
 available_tools = {
     "tambah_jadwal": tambah_jadwal,
     "hapus_jadwal": hapus_jadwal,
@@ -81,19 +80,23 @@ available_tools = {
     "hapus_tugas": hapus_tugas,
 }
 
-# Konfigurasi Gemini AI dengan Declarative Tools
+# Konfigurasi Gemini AI dengan Waktu Real-Time yang Jelas
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
     
+    # Hitung tanggal hari ini (Minggu, 13 September 2026) secara dinamis agar AI tidak salah hitung hari 'besok'
+    today_str = datetime.now().strftime("%Y-%m-%d (%A)")
+    
     system_instruction = (
-        "Kamu adalah Izumi Academic Bot, asisten pribadi akademik khusus untuk Ikrimah "
-        "(mahasiswa Politeknik APP Jakarta). Waktu saat ini adalah TAHUN 2026. "
-        "Gunakan fungsi yang tersedia jika Ikrimah ingin menambah atau menghapus jadwal/tugas melalui percakapan santai. "
-        "JANGAN PERNAH membahas jadwal sepak bola atau libur nasional di luar akademik."
+        f"Kamu adalah Izumi Academic Bot, asisten pribadi akademik khusus untuk Ikrimah "
+        f"(mahasiswa Politeknik APP Jakarta). "
+        f"WAKTU HARI INI ADALAH: {today_str}. "
+        f"PENTING: Jika Ikrimah bertanya tentang 'besok', hitunglah 1 hari setelah hari ini ({today_str}). "
+        f"Gunakan fungsi yang tersedia jika Ikrimah ingin menambah atau menghapus jadwal/tugas. "
+        f"JANGAN PERNAH membahas jadwal sepak bola atau libur nasional di luar akademik."
     )
     
-    # Daftarkan fungsi ke model Gemini
     model = genai.GenerativeModel(
         model_name='gemini-3.6-flash',
         system_instruction=system_instruction,
@@ -108,14 +111,13 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Natural Language & Tools) is running!"
+    return "Izumi Academic Bot is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 telegram_app = None
 
-# Fungsi Reminder Otomatis via Scheduler (24/7)
 def check_reminders():
     global telegram_app
     if not telegram_app:
@@ -162,7 +164,6 @@ def check_reminders():
             except Exception:
                 pass
 
-# Handler Pesan Telegram dengan Dukungan Function Calling Otomatis
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_message = update.message.text
     logging.info(f"Pesan diterima: {user_message}")
@@ -172,11 +173,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Kirim chat ke Gemini, model akan otomatis memilih apakah perlu panggil fungsi atau jawab teks biasa
         chat_context = f"Database saat ini:\nJadwal: {json.dumps(db['jadwal'])}\nTugas: {json.dumps(db['tugas'])}\n\nPertanyaan/Pernyataan: {user_message}"
         response = model.generate_content(chat_context)
         
-        # Cek apakah Gemini ingin memanggil fungsi Python
         if response.candidates and response.candidates[0].content.parts:
             part = response.candidates[0].content.parts[0]
             if fn := getattr(part, 'function_call', None):
@@ -189,7 +188,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await update.message.reply_text(result_msg)
                     return
 
-        # Jika tidak ada fungsi yang dipanggil, balas sebagai teks biasa
         await update.message.reply_text(response.text)
         
     except Exception as e:
@@ -203,23 +201,20 @@ def main():
         logging.error("IZUMI_ACADEMIC_TOKEN tidak ditemukan di environment variables!")
         return
 
-    # Jalankan server Flask di background thread
     t = Thread(target=run_flask)
     t.daemon = True
     t.start()
 
-    # Setup Background Scheduler untuk Reminder Otomatis
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
     scheduler.start()
 
-    # Jalankan Bot Telegram
     application = ApplicationBuilder().token(token).build()
     telegram_app = application
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Natural Language) siap dijalankan...")
+    logging.info("Izumi Academic Bot siap dijalankan...")
     application.run_polling()
 
 if __name__ == '__main__':
