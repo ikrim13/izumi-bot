@@ -5,6 +5,8 @@ import re
 from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
+import requests
+from icalendar import Calendar
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -13,6 +15,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 
 DATA_FILE = "academic_data.json"
+ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?userid=5325&authtoken=16e794057ce3844f51ea241e4fe35032993933db&preset_what=all&preset_time=custom"
 
 day_map_full = {
     "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
@@ -21,10 +24,10 @@ day_map_full = {
 
 def get_initial_semester3_schedule():
     raw_courses = [
-        # SENIN
-        {"nama": "Manajemen Keuangan", "weekday": 0, "waktu": "13.00-14.20", "ruang": "R. 3.7"},
-        # SELASA
-        {"nama": "Kuliah Sesi 2", "weekday": 1, "waktu": "10.15", "ruang": "R. 3.4"},
+        # SENIN (Dikosongkan sesuai request)
+        
+        # SELASA (Sesi 2 diganti jadi Manajemen Keuangan, ruang 3.4)
+        {"nama": "Manajemen Keuangan", "weekday": 1, "waktu": "10.15", "ruang": "R. 3.4"},
         {"nama": "Aplikasi Komputer", "weekday": 1, "waktu": "13.00-15.00", "ruang": "Lab E.2.1"},
         # RABU
         {"nama": "Bahasa Indonesia & TPI", "weekday": 2, "waktu": "07.30-08.50", "ruang": "R. 3.2"},
@@ -64,19 +67,55 @@ def get_initial_semester3_schedule():
 
     return generated_list
 
+def fetch_elearning_tasks():
+    tugas_list = []
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'}
+        response = requests.get(ICAL_ELEARNING, headers=headers, timeout=10)
+        if response.status_code == 200:
+            cal = Calendar.from_ical(response.content)
+            for component in cal.walk('vevent'):
+                summary = str(component.get('summary', 'Tugas Tanpa Nama'))
+                dtstart = component.get('dtstart')
+                
+                if dtstart:
+                    dt = dtstart.dt
+                    if isinstance(dt, datetime):
+                        tanggal = dt.strftime("%Y-%m-%d")
+                        waktu = dt.strftime("%H:%M")
+                    else:
+                        tanggal = dt.strftime("%Y-%m-%d")
+                        waktu = "Sepanjang Hari"
+                    
+                    item_tugas = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": "E-Learning"}
+                    if item_tugas not in tugas_list:
+                        tugas_list.append(item_tugas)
+            logging.info(f"Berhasil memuat {len(tugas_list)} tugas dari E-Learning.")
+        else:
+            logging.error(f"Gagal tarik iCal E-Learning, status: {response.status_code}")
+    except Exception as e:
+        logging.error(f"Error fetching E-Learning iCal: {e}")
+        
+    return tugas_list
+
 def load_data():
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
                 data = json.load(f)
-                if not data.get("jadwal"):
-                    data["jadwal"] = get_initial_semester3_schedule()
-                    save_data(data)
+                # Paksa update ulang jadwal supaya hari senin kosong dan selasa ter-update
+                data["jadwal"] = get_initial_semester3_schedule()
+                if not data.get("tugas"):
+                    data["tugas"] = fetch_elearning_tasks()
+                save_data(data)
                 return data
         except Exception:
             pass
             
-    initial_data = {"jadwal": get_initial_semester3_schedule(), "tugas": []}
+    initial_data = {
+        "jadwal": get_initial_semester3_schedule(), 
+        "tugas": fetch_elearning_tasks()
+    }
     save_data(initial_data)
     return initial_data
 
@@ -86,126 +125,21 @@ def save_data(data):
 
 db = load_data()
 
-def parse_natural_add(text):
-    text_lower = text.lower()
-    is_recurring = "setiap" in text_lower
-    
-    target_weekday = None
-    for day_name, d_idx in day_map_full.items():
-        if day_name in text_lower:
-            target_weekday = d_idx
-            break
-            
-    match_time = re.search(r'(\d{1,2})[:\.](\d{2})', text)
-    if match_time:
-        waktu = f"{int(match_time.group(1)):02d}:{match_time.group(2)}"
-    else:
-        match_jam = re.search(r'jam\s+(\d{1,2})', text_lower)
-        if match_jam:
-            waktu = f"{int(match_jam.group(1)):02d}:00"
-        else:
-            waktu = "08:00"
-            
-    match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
-    tanggal = match_date.group(0) if match_date else None
-
-    clean_text = text
-    for w in ["setiap", "tambahin", "tambah", "jadwal", "tolong", "buatkan", "agenda", "buat", "hari"]:
-        clean_text = re.sub(w, '', clean_text, flags=re.IGNORECASE)
-    
-    for day_name in day_map_full.keys():
-        clean_text = re.sub(day_name, '', clean_text, flags=re.IGNORECASE)
-        
-    clean_text = re.sub(r'\d{4}-\d{2}-\d{2}', '', clean_text)
-    clean_text = re.sub(r'jam\s+\d{1,2}[:\.]?\d*', '', clean_text, flags=re.IGNORECASE)
-    clean_text = re.sub(r'\d{1,2}[:\.]\d{2}', '', clean_text)
-    clean_text = clean_text.replace("tanggal", "").strip(" ,|-")
-    
-    nama_kegiatan = clean_text.capitalize() if clean_text else "Kegiatan"
-
-    if is_recurring and target_weekday is not None:
-        now = datetime.now()
-        days_ahead = target_weekday - now.weekday()
-        if days_ahead < 0:
-            days_ahead += 7
-        start_date = now + timedelta(days=days_ahead)
-        
-        added_count = 0
-        for i in range(52):
-            current_date = start_date + timedelta(weeks=i)
-            date_str = current_date.strftime("%Y-%m-%d")
-            item = {"nama": nama_kegiatan, "tanggal": date_str, "waktu": waktu, "sumber": "Chat"}
-            db["jadwal"].append(item)
-            added_count += 1
+def background_sync_elearning():
+    global db
+    logging.info("Memulai sinkronisasi tugas E-Learning berkala...")
+    live_tugas = fetch_elearning_tasks()
+    if live_tugas:
+        db["tugas"] = live_tugas
         save_data(db)
-        return f"Sip! Jadwal rutin **{nama_kegiatan}** berhasil ditambahkan untuk 1 tahun ke depan."
-    else:
-        tgl_final = tanggal if tanggal else datetime.now().strftime("%Y-%m-%d")
-        item = {"nama": nama_kegiatan, "tanggal": tgl_final, "waktu": waktu, "sumber": "Chat"}
-        db["jadwal"].append(item)
-        save_data(db)
-        return f"Sip, udah dicatat:\n📌 **{nama_kegiatan}**\n📅 {tgl_final} | ⏰ {waktu}"
-
-def hapus_jadwal_lokal(text: str) -> str:
-    text_lower = text.lower()
-    
-    target_weekday = None
-    for day_name, d_idx in day_map_full.items():
-        if f"hari {day_name}" in text_lower or day_name in text_lower:
-            if any(k in text_lower for k in [f"hari {day_name}", f"di {day_name}", f"pada {day_name}"]):
-                target_weekday = d_idx
-                break
-
-    if target_weekday is not None:
-        initial_len = len(db["jadwal"])
-        day_name_str = list(day_map_full.keys())[list(day_map_full.values()).index(target_weekday)].capitalize()
-        
-        filtered_list = []
-        for j in db["jadwal"]:
-            try:
-                j_date = datetime.strptime(j.get("tanggal"), "%Y-%m-%d")
-                if j_date.weekday() != target_weekday:
-                    filtered_list.append(j)
-            except Exception:
-                filtered_list.append(j)
-                
-        db["jadwal"] = filtered_list
-        save_data(db)
-        removed_count = initial_len - len(db["jadwal"])
-        return f"🗑️ Berhasil menghapus {removed_count} sesi jadwal di hari **{day_name_str}**!"
-
-    match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
-    target_date = match_date.group(0) if match_date else None
-    
-    keyword = text_lower
-    for w in ["hapus", "jadwal", "tolong", "batalkan", "buang", "tanggal", "semua"]:
-        keyword = keyword.replace(w, "")
-    if target_date:
-        keyword = keyword.replace(target_date, "")
-    keyword = keyword.strip(" ,.-")
-    
-    if not keyword:
-        return "Mau hapus jadwal apa nih?"
-
-    initial_len = len(db["jadwal"])
-    if target_date:
-        db["jadwal"] = [j for j in db["jadwal"] if not (keyword in j["nama"].lower() and j["tanggal"] == target_date)]
-        msg = f"Oke, jadwal '{keyword}' pada tanggal {target_date} dihapus."
-    else:
-        db["jadwal"] = [j for j in db["jadwal"] if keyword not in j["nama"].lower()]
-        msg = f"Oke, semua jadwal dengan kata kunci '{keyword}' dihapus."
-        
-    if len(db["jadwal"]) < initial_len:
-        save_data(db)
-        return msg
-    return f"Gak nemu jadwal dengan kata kunci '{keyword}'."
+        logging.info("Sinkronisasi tugas E-Learning selesai.")
 
 # Flask Keep-Alive Server (Port 8080)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Fixed Order) is running!"
+    return "Izumi Academic Bot (Updated Schedule) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -246,16 +180,36 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    if any(k in msg_lower for k in ["tambahin", "tambah", "setiap", "buatkan jadwal"]):
-        res = parse_natural_add(user_message)
-        await update.message.reply_text(res)
+    # 1. CEK TUGAS E-LEARNING
+    if any(k in msg_lower for k in ["tugas", "deadline", "pr"]):
+        live_tugas = fetch_elearning_tasks()
+        if live_tugas:
+            db["tugas"] = live_tugas
+            save_data(db)
+            
+        tugas_list = db.get("tugas", [])
+        now = datetime.now()
+        upcoming_tugas = []
+        for t in tugas_list:
+            try:
+                t_date = datetime.strptime(t.get("tanggal"), "%Y-%m-%d")
+                if t_date.date() >= now.date():
+                    upcoming_tugas.append(t)
+            except Exception:
+                pass
+                
+        upcoming_tugas = sorted(upcoming_tugas, key=lambda x: x.get("tanggal", ""))
+        
+        resp = f"📌 **Daftar Tugas & Deadline E-Learning:**\n"
+        if upcoming_tugas:
+            for t in upcoming_tugas[:10]:
+                resp += f"- **{t.get('tanggal')}** ({t.get('waktu', '-')}) | {t['nama']}\n"
+        else:
+            resp += "Belum ada tugas atau deadline tercatat dari E-Learning saat ini. Aman!"
+        await update.message.reply_text(resp)
         return
 
-    if any(k in msg_lower for k in ["hapus", "batalkan", "buang jadwal"]):
-        res = hapus_jadwal_lokal(user_message)
-        await update.message.reply_text(res)
-        return
-
+    # 2. CEK JADWAL BERDASARKAN HARI
     target_weekday = None
     day_str_target = ""
     for day_name, d_idx in day_map_full.items():
@@ -289,6 +243,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
+    # 3. CEK 7 HARI KEDEPAN
     if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
@@ -310,25 +265,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower):
-        target_date = datetime.now().strftime("%Y-%m-%d")
-        if "besok" in msg_lower:
-            target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
-        
-        filtered = [j for j in db.get("jadwal", []) if j.get("tanggal"] == target_date]
-        resp = f"📅 **Jadwal tanggal {target_date}:**\n"
-        if filtered:
-            for j in filtered:
-                resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
-        else:
-            resp += "Nggak ada jadwal di tanggal ini."
-        await update.message.reply_text(resp)
-        return
-
+    # 4. FALLBACK UMUM
     await update.message.reply_text(
-        "🤖 Halo Ikrimah! Jadwal Semester 3 PNJ Akuntansi sudah aktif:\n"
-        "- Ketik nama hari (misal: `senin`, `selasa`, `rabu`, dll) buat cek jadwal.\n"
-        "- Bot juga bisa hapus jadwal per hari (contoh: *'hapus semua jadwal di hari minggu'*)."
+        "🤖 Halo Ikrimah! Jadwal sudah diperbarui (Senin kosong, Selasa sesi 2 Manajemen Keuangan):\n"
+        "- Ketik **'tugas'** buat cek deadline E-Learning.\n"
+        "- Ketik nama hari (misal: `senin`, `selasa`, `rabu`) buat cek jadwal kuliah."
     )
 
 def main():
@@ -344,6 +285,7 @@ def main():
 
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
+    scheduler.add_job(background_sync_elearning, 'interval', hours=2)
     scheduler.start()
 
     application = ApplicationBuilder().token(token).build()
@@ -351,7 +293,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot berjalan...")
+    logging.info("Izumi Academic Bot (Updated) berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
