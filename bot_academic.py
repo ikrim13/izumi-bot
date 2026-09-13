@@ -27,21 +27,25 @@ def run_flask():
     app.run(host='0.0.0.0', port=8080)
 
 def get_ai_response(prompt):
-    """Fungsi helper untuk mencoba beberapa variasi nama model Gemini secara otomatis"""
-    model_names = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'gemini-1.5-pro', 'models/gemini-1.5-pro', 'gemini-pro']
-    
-    last_error = ""
-    for m_name in model_names:
+    # Coba list model yang diizinkan oleh key ini atau gunakan flash langsung
+    try:
+        # Menggunakan GenerativeModel standar yang didukung key baru
+        model = genai.GenerativeModel('gemini-1.5-flash')
+        response = model.generate_content(prompt)
+        if response and response.text:
+            return response.text
+    except Exception as e1:
         try:
-            model = genai.GenerativeModel(m_name)
-            response = model.generate_content(prompt)
-            if response and response.text:
-                return response.text
-        except Exception as e:
-            last_error = str(e)
-            continue
-            
-    return f"Maaf krim, semua model Gemini gagal diakses. Error terakhir: {last_error}"
+            # Fallback ke pencarian model aktif secara otomatis dari API key kamu
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    fallback_model = genai.GenerativeModel(m.name)
+                    res = fallback_model.generate_content(prompt)
+                    if res and res.text:
+                        return res.text
+            return f"Error API: {str(e1)}"
+        except Exception as e2:
+            return f"Gagal total tembus API Gemini. Detail: {str(e2)}"
 
 # Handler Pesan Telegram
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -53,7 +57,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        # Panggil helper yang otomatis nge-test berbagai nama model
         reply_text = get_ai_response(user_message)
         await update.message.reply_text(reply_text)
     except Exception as e:
