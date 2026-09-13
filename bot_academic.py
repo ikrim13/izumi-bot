@@ -20,7 +20,7 @@ ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?us
 DATA_FILE = "academic_data.json"
 
 def fetch_and_parse_ical():
-    """Mengambil data iCal dengan aman untuk mencegah spam request."""
+    """Mengambil data iCal secara aman."""
     jadwal_list = []
     urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
     
@@ -42,7 +42,6 @@ def fetch_and_parse_ical():
                             tanggal = dt.strftime("%Y-%m-%d")
                             waktu = "Sepanjang Hari"
                         
-                        # Hindari duplikat data
                         item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
                         if item_baru not in jadwal_list:
                             jadwal_list.append(item_baru)
@@ -62,7 +61,6 @@ def load_data():
         except Exception:
             pass
             
-    # Default jika file belum ada
     initial_jadwal = fetch_and_parse_ical()
     data = {"jadwal": initial_jadwal, "tugas": []}
     save_data(data)
@@ -74,79 +72,54 @@ def save_data(data):
 
 db = load_data()
 
-# Fungsi Background untuk Sync iCal otomatis tiap 1 jam sekali (Caches data)
 def background_sync_ical():
     global db
     logging.info("Memulai sinkronisasi berkala iCal...")
     live_jadwal = fetch_and_parse_ical()
     if live_jadwal:
-        # Pertahankan tugas dan jadwal manual, update dari iCal
         manual_items = [j for j in db.get("jadwal", []) if j.get("sumber") == "Manual"]
         db["jadwal"] = live_jadwal + manual_items
         save_data(db)
         logging.info("Sinkronisasi iCal selesai.")
 
-# --- FUNGSI TOOLS CRUD ---
+# --- FUNGSI LOCAL CRUD (Tanpa Kuota AI) ---
 def tambah_jadwal(nama: str, tanggal: str, waktu: str, ruang: str = "Kampus") -> str:
-    """Menambahkan jadwal kuliah manual."""
     item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "ruang": ruang, "sumber": "Manual"}
     db["jadwal"].append(item)
     save_data(db)
-    return f"Berhasil nambah jadwal: {nama} tanggal {tanggal} pukul {waktu} di {ruang}."
+    return f"✅ Berhasil nambah jadwal: {nama} tanggal {tanggal} pukul {waktu} di {ruang}."
 
 def hapus_jadwal(nama: str) -> str:
-    """Menghapus jadwal berdasarkan nama."""
     initial_len = len(db["jadwal"])
     db["jadwal"] = [j for j in db["jadwal"] if nama.lower() not in j["nama"].lower()]
     if len(db["jadwal"]) < initial_len:
         save_data(db)
-        return f"Jadwal '{nama}' berhasil dihapus."
-    return f"Jadwal dengan nama '{nama}' tidak ditemukan."
+        return f"🗑️ Jadwal dengan kata kunci '{nama}' berhasil dihapus."
+    return f"❌ Jadwal '{nama}' tidak ditemukan."
 
 def tambah_tugas(nama: str, deadline: str) -> str:
-    """Menambahkan tugas baru dengan format deadline (YYYY-MM-DD HH:MM)."""
     try:
         dl_obj = datetime.strptime(deadline, "%Y-%m-%d %H:%M")
         item = {"nama": nama, "deadline": deadline, "deadline_obj": dl_obj.isoformat()}
         db["tugas"].append(item)
         save_data(db)
-        return f"Berhasil nambah tugas: {nama} dengan deadline {deadline}."
+        return f"📝 Berhasil nambah tugas: {nama} dengan deadline {deadline}."
     except Exception as e:
-        return f"Format deadline salah. Gunakan format YYYY-MM-DD HH:MM. Error: {e}"
+        return f"Format deadline salah. Gunakan format YYYY-MM-DD HH:MM (Contoh: 2026-09-15 23:59)."
 
 def hapus_tugas(nama: str) -> str:
-    """Menghapus tugas berdasarkan nama."""
     initial_len = len(db["tugas"])
     db["tugas"] = [t for t in db["tugas"] if nama.lower() not in t["nama"].lower()]
     if len(db["tugas"]) < initial_len:
         save_data(db)
-        return f"Tugas '{nama}' berhasil dihapus."
-    return f"Tugas dengan nama '{nama}' tidak ditemukan."
+        return f"🎉 Tugas '{nama}' berhasil dihapus (selesai/dibatalkan)."
+    return f"❌ Tugas '{nama}' tidak ditemukan."
 
-available_tools = {
-    "tambah_jadwal": tambah_jadwal,
-    "hapus_jadwal": hapus_jadwal,
-    "tambah_tugas": tambah_tugas,
-    "hapus_tugas": hapus_tugas,
-}
-
-# Konfigurasi Gemini AI
+# Konfigurasi Gemini AI (Opsional untuk obrolan bebas)
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    today_str = datetime.now().strftime("%Y-%m-%d (%A)")
-    
-    system_instruction = (
-        f"Kamu adalah Izumi Academic Bot, asisten akademik khusus untuk Ikrimah (Politeknik APP Jakarta). "
-        f"Hari ini: {today_str}. Bantu kelola jadwal & tugas berdasarkan database yang ada. "
-        f"Jangan pernah bahas hal non-akademik."
-    )
-    
-    model = genai.GenerativeModel(
-        model_name='gemini-3.6-flash',
-        system_instruction=system_instruction,
-        tools=[tambah_jadwal, hapus_jadwal, tambah_tugas, hapus_tugas]
-    )
+    model = genai.GenerativeModel('gemini-3.6-flash')
 else:
     model = None
 
@@ -155,7 +128,7 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Optimized Anti-Limit) is running!"
+    return "Izumi Academic Bot (Anti-Limit Ultimate) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -215,8 +188,30 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # Shortcut manual instan untuk cek jadwal/tugas (TANPA MEMAKAI KUOTA GEMINI AI!)
-    if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower or "minggu" in msg_lower):
+    # 1. CEK JADWAL SEMINGGU KEDEPAN / 7 HARI (100% Lokal, Tanpa Kuota AI)
+    if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu", "apa aja jadwal", "jadwalnya", "buat 1 minggu"]):
+        now = datetime.now()
+        end_date = now + timedelta(days=7)
+        filtered = []
+        for j in db.get("jadwal", []):
+            try:
+                j_date = datetime.strptime(j.get("tanggal"), "%Y-%m-%d")
+                if now.date() <= j_date.date() <= end_date.date():
+                    filtered.append(j)
+            except Exception:
+                pass
+        filtered = sorted(filtered, key=lambda x: x.get("tanggal", ""))
+        resp = f"📅 **Jadwal 7 Hari ke Depan:**\n"
+        if filtered:
+            for j in filtered:
+                resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
+        else:
+            resp += "Tidak ada jadwal kuliah atau agenda tercatat dalam 7 hari ke depan."
+        await update.message.reply_text(resp)
+        return
+
+    # 2. CEK JADWAL HARI INI / BESOK (100% Lokal, Tanpa Kuota AI)
+    if "jadwal" in msg_lower and ("besok" in msg_lower or "hari ini" in msg_lower):
         target_date = datetime.now().strftime("%Y-%m-%d")
         if "besok" in msg_lower:
             target_date = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d")
@@ -225,39 +220,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         resp = f"📅 **Jadwal untuk tanggal {target_date}:**\n"
         if filtered:
             for j in filtered:
-                resp += f"- {j['nama']} ({j['waktu']})\n"
+                resp += f"- {j['nama']} ({j.get('waktu', '-')})\n"
         else:
             resp += "Tidak ada jadwal tercatat di tanggal ini."
         await update.message.reply_text(resp)
         return
 
+    # 3. LIHAT DAFTAR TUGAS (100% Lokal, Tanpa Kuota AI)
+    if "tugas" in msg_lower and ("lihat" in msg_lower or "apa" in msg_lower or "daftar" in msg_lower):
+        tugas_list = db.get("tugas", [])
+        resp = f"📝 **Daftar Tugas Aktif:**\n"
+        if tugas_list:
+            for t in tugas_list:
+                resp += f"- {t['nama']} (Deadline: {t['deadline']})\n"
+        else:
+            resp += "Belum ada tugas akademik yang tercatat. Aman!"
+        await update.message.reply_text(resp)
+        return
+
+    # 4. OBROLAN UMUM / TUGAS LAINNYA (Menggunakan Gemini dengan Error Handling Aman)
     if not model:
         await update.message.reply_text("Duh, API Key Gemini belum dipasang.")
         return
 
     try:
-        # Kirim data ringkas ke Gemini agar hemat kuota token
-        chat_context = f"Jadwal ringkas: {len(db['jadwal'])} item. Tugas: {len(db['tugas'])} item.\nUser: {user_message}"
-        response = model.generate_content(chat_context)
-        
-        if response.candidates and response.candidates[0].content.parts:
-            part = response.candidates[0].content.parts[0]
-            if fn := getattr(part, 'function_call', None):
-                fn_name = fn.name
-                fn_args = dict(fn.args)
-                if fn_name in available_tools:
-                    result_msg = available_tools[fn_name](**fn_args)
-                    await update.message.reply_text(result_msg)
-                    return
-
+        response = model.generate_content(f"Kamu adalah asisten akademik Politeknik APP Jakarta untuk Ikrimah. Jawab ringkas dan santai: {user_message}")
         await update.message.reply_text(response.text)
-        
     except Exception as e:
-        logging.error(f"Error Gemini API (Kemungkinan Rate Limit): {e}")
-        # Fallback pengaman: Jika Gemini kena limit, bot tetap responsif pakai teks biasa
+        logging.error(f"Error Gemini API: {e}")
         await update.message.reply_text(
-            "⚠️ Duh, otak AI-ku lagi agak sibuk (kena limit sesaat). "
-            "Tapi tenang, database jadwal & tugas kamu aman! Coba ketik ulang beberapa saat lagi ya."
+            "🤖 (Mode Hemat Aktif) Otak AI-ku lagi istirahat sebentar karena limit gratis harian tercapai, "
+            "tapi **database jadwal, tugas, dan reminder otomatis kamu tetep jalan 100% normal!** "
+            "Ketik 'jadwal' atau 'tugas' kapanpun kamu butuh."
         )
 
 def main():
@@ -271,7 +265,6 @@ def main():
     t.daemon = True
     t.start()
 
-    # Background Scheduler (Reminder tiap 1 menit, Sync iCal otomatis tiap 1 jam)
     scheduler = BackgroundScheduler()
     scheduler.add_job(check_reminders, 'interval', minutes=1)
     scheduler.add_job(background_sync_ical, 'interval', hours=1)
@@ -282,7 +275,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Optimized & Anti-Limit) berjalan...")
+    logging.info("Izumi Academic Bot (Anti-Limit Ultimate) berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
