@@ -1,12 +1,12 @@
 import os
 import json
 import logging
+import re
 from datetime import datetime, timedelta
 from flask import Flask
 from threading import Thread
 import requests
 from icalendar import Calendar
-import google.generativeai as genai
 from telegram import Update
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filters
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -20,61 +20,48 @@ ICAL_ELEARNING = "https://e-learn.poltekapp.ac.id/calendar/export_execute.php?us
 DATA_FILE = "academic_data.json"
 
 def fetch_and_parse_ical():
-    """Mengambil dan memparsing data iCal secara fleksibel dan aman."""
+    """Mengambil data iCal secara aman."""
     jadwal_list = []
     urls = [("Google Calendar", ICAL_GOOGLE), ("E-Learning Poltek APP", ICAL_ELEARNING)]
     
     for source_name, url in urls:
         try:
-            logging.info(f"Mengambil iCal dari {source_name}...")
-            response = requests.get(url, timeout=20)
-            logging.info(f"HTTP Status {source_name}: {response.status_code}")
-            
+            response = requests.get(url, timeout=10)
             if response.status_code == 200:
                 cal = Calendar.from_ical(response.content)
-                count = 0
-                for component in cal.walk():
-                    if component.name == "VEVENT":
-                        summary = str(component.get('summary', 'Tanpa Judul'))
-                        dtstart = component.get('dtstart')
+                for component in cal.walk('vevent'):
+                    summary = str(component.get('summary', 'Tanpa Judul'))
+                    dtstart = component.get('dtstart')
+                    
+                    if dtstart:
+                        dt = dtstart.dt
+                        if isinstance(dt, datetime):
+                            tanggal = dt.strftime("%Y-%m-%d")
+                            waktu = dt.strftime("%H:%M")
+                        else:
+                            tanggal = dt.strftime("%Y-%m-%d")
+                            waktu = "Sepanjang Hari"
                         
-                        if dtstart:
-                            dt = dtstart.dt
-                            if isinstance(dt, datetime):
-                                tanggal = dt.strftime("%Y-%m-%d")
-                                waktu = dt.strftime("%H:%M")
-                            else:
-                                # Jika all-day event berupa date object
-                                tanggal = dt.strftime("%Y-%m-%d")
-                                waktu = "Sepanjang Hari"
-                            
-                            item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
-                            if item_baru not in jadwal_list:
-                                jadwal_list.append(item_baru)
-                                count += 1
-                logging.info(f"Sukses! Berhasil memuat {count} agenda dari {source_name}")
+                        item_baru = {"nama": summary, "tanggal": tanggal, "waktu": waktu, "sumber": source_name}
+                        if item_baru not in jadwal_list:
+                            jadwal_list.append(item_baru)
+                logging.info(f"Berhasil memuat agenda dari {source_name}")
             else:
-                logging.error(f"Gagal mengambil {source_name}, status: {response.status_code}")
+                logging.error(f"Gagal ambil iCal {source_name}, status: {response.status_code}")
         except Exception as e:
-            logging.error(f"Error saat parsing iCal {source_name}: {e}")
+            logging.error(f"Error parsing iCal {source_name}: {e}")
             
-    logging.info(f"Total keseluruhan jadwal iCal tersinkron: {len(jadwal_list)} item.")
     return jadwal_list
 
 def load_data():
-    initial_jadwal = fetch_and_parse_ical()
     if os.path.exists(DATA_FILE):
         try:
             with open(DATA_FILE, "r") as f:
-                data = json.load(f)
-                # Jika iCal berhasil ditarik, update data iCal tapi pertahankan jadwal manual user
-                manual_items = [j for j in data.get("jadwal", []) if j.get("sumber") == "Manual"]
-                data["jadwal"] = initial_jadwal + manual_items
-                save_data(data)
-                return data
-        except Exception as e:
-            logging.error(f"Error membaca file JSON lokal: {e}")
+                return json.load(f)
+        except Exception:
+            pass
             
+    initial_jadwal = fetch_and_parse_ical()
     data = {"jadwal": initial_jadwal, "tugas": []}
     save_data(data)
     return data
@@ -90,55 +77,74 @@ def background_sync_ical():
     logging.info("Memulai sinkronisasi berkala iCal...")
     live_jadwal = fetch_and_parse_ical()
     if live_jadwal:
-        manual_items = [j for j in db.get("jadwal", []) if j.get("sumber") == "Manual"]
+        manual_items = [j for j in db.get("jadwal", []) if j.get("sumber") in ["Manual", "Chat"]]
         db["jadwal"] = live_jadwal + manual_items
         save_data(db)
-        logging.info("Sinkronisasi iCal berkala selesai.")
+        logging.info("Sinkronisasi iCal selesai.")
 
-# --- FUNGSI CRUD LOKAL ---
-def tambah_jadwal(nama: str, tanggal: str, waktu: str) -> str:
-    """Menambahkan jadwal manual baru ke database."""
-    item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "sumber": "Manual"}
+# --- FUNGSI PARSER NATURAL (TAMBAH & HAPUS OTOMATIS) ---
+def parse_natural_add(text):
+    """Mencoba menebak nama kegiatan, tanggal (YYYY-MM-DD), dan waktu (HH:MM) dari kalimat santai."""
+    text_lower = text.lower()
+    
+    # Cari pola tanggal YYYY-MM-DD
+    match_date = re.search(r'\d{4}-\d{2}-\d{2}', text)
+    tanggal = match_date.group(0) if match_date else datetime.now().strftime("%Y-%m-%d")
+    
+    # Cari pola waktu HH:MM atau jam X
+    match_time = re.search(r'(\d{1,2})[:\.](\d{2})', text)
+    if match_time:
+        waktu = f"{int(match_time.group(1)):02d}:{match_time.group(2)}"
+    else:
+        match_jam = re.search(r'jam\s+(\d{1,2})', text_lower)
+        if match_jam:
+            waktu = f"{int(match_jam.group(1)):02d}:00"
+        else:
+            waktu = "08:00" # Default jam jika tidak disebutkan
+            
+    # Ekstraksi nama kegiatan (membersihkan kata perintah)
+    clean_text = text
+    for w in ["tambahin", "tambah", "jadwal", "tolong", "buatkan", "agenda", "buat"]:
+        clean_text = re.sub(w, '', clean_text, flags=re.IGNORECASE)
+    
+    # Buang bagian tanggal & waktu dari teks nama
+    clean_text = re.sub(r'\d{4}-\d{2}-\d{2}', '', clean_text)
+    clean_text = re.sub(r'jam\s+\d{1,2}[:\.]?\d*', '', clean_text, flags=re.IGNORECASE)
+    clean_text = re.sub(r'\d{1,2}[:\.]\d{2}', '', clean_text)
+    clean_text = clean_text.replace("tanggal", "").replace("hari", "").strip(" ,|-")
+    
+    nama_kegiatan = clean_text.capitalize() if clean_text else "Kegiatan Baru"
+    return nama_kegiatan, tanggal, waktu
+
+def tambah_jadwal_lokal(nama: str, tanggal: str, waktu: str) -> str:
+    item = {"nama": nama, "tanggal": tanggal, "waktu": waktu, "sumber": "Chat"}
     db["jadwal"].append(item)
     save_data(db)
-    return f"Sip, jadwal '{nama}' tanggal {tanggal} jam {waktu} sudah ditambahkan ya!"
+    return f"Sip, udah aku catat ya:\n📌 **{nama}**\n📅 {tanggal} | ⏰ Pukul {waktu}"
 
-def hapus_jadwal(nama_kegiatan: str) -> str:
-    """Menghapus jadwal berdasarkan nama kegiatan."""
+def hapus_jadwal_lokal(text: str) -> str:
+    # Bersihkan kata perintah hapus
+    keyword = text.lower()
+    for w in ["hapus", "jadwal", "tolong", "batalkan", "buang", "nggak", "gak"]:
+        keyword = keyword.replace(w, "")
+    keyword = keyword.strip(" ,.-")
+    
+    if not keyword:
+        return "Mau hapus jadwal apa nih? Coba sebutkan nama kegiatannya."
+
     initial_len = len(db["jadwal"])
-    db["jadwal"] = [j for j in db["jadwal"] if nama_kegiatan.lower() not in j["nama"].lower()]
+    db["jadwal"] = [j for j in db["jadwal"] if keyword not in j["nama"].lower()]
     if len(db["jadwal"]) < initial_len:
         save_data(db)
-        return f"Oke, jadwal yang ada unsur '{nama_kegiatan}' sudah dihapus dari daftar."
-    return f"Duh, gak nemu jadwal dengan nama '{nama_kegiatan}'."
-
-available_tools = [tambah_jadwal, hapus_jadwal]
-
-# Konfigurasi Gemini AI dengan Tools
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-if GEMINI_API_KEY:
-    genai.configure(api_key=GEMINI_API_KEY)
-    today_str = datetime.now().strftime("%Y-%m-%d (%A)")
-    system_instruction = (
-        f"Kamu adalah Izumi, asisten akademik santai untuk Ikrimah di Politeknik APP Jakarta. "
-        f"Hari ini adalah {today_str}. "
-        f"Kamu bisa membantu menjawab jadwal dari Senin sampai Minggu kapanpun diminta, "
-        f"serta bisa menambahkan atau menghapus jadwal menggunakan fungsi yang tersedia jika diminta oleh user secara natural."
-    )
-    model = genai.GenerativeModel(
-        model_name='gemini-3.6-flash',
-        system_instruction=system_instruction,
-        tools=available_tools
-    )
-else:
-    model = None
+        return f"Oke, jadwal yang mengandung kata '{keyword}' udah aku hapus dari daftar."
+    return f"Duh, gak nemu jadwal dengan nama atau kata kunci '{keyword}'."
 
 # Flask Keep-Alive Server (Port 8080)
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Izumi Academic Bot (Chat Santai Ultimate) is running!"
+    return "Izumi Academic Bot (Full Natural Chat) is running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=8080)
@@ -154,26 +160,6 @@ def check_reminders():
     admin_id = os.getenv("ADMIN_USER_ID")
     if not admin_id:
         return
-
-    for tugas in list(db.get("tugas", [])):
-        if "deadline_obj" in tugas:
-            dl_time = datetime.fromisoformat(tugas["deadline_obj"])
-            diff = dl_time - now
-            
-            if timedelta(hours=47.5) <= diff <= timedelta(hours=48.5) and not tugas.get("notif_h2"):
-                telegram_app.bot.send_message(chat_id=admin_id, text=f"⏰ **REMINDER TUGAS (H-2)**\nTugas **{tugas['nama']}** deadline dalam 2 hari ({tugas['deadline']}).")
-                tugas["notif_h2"] = True
-                save_data(db)
-            
-            if timedelta(hours=23.5) <= diff <= timedelta(hours=24.5) and not tugas.get("notif_h1"):
-                telegram_app.bot.send_message(chat_id=admin_id, text=f"⏰ **REMINDER TUGAS (H-1)**\nTugas **{tugas['nama']}** deadline besok! ({tugas['deadline']}).")
-                tugas["notif_h1"] = True
-                save_data(db)
-                
-            if timedelta(hours=1.9) <= diff <= timedelta(hours=2.1) and not tugas.get("notif_2h"):
-                telegram_app.bot.send_message(chat_id=admin_id, text=f"🚨 **URGENT: DEADLINE 2 JAM LAGI!**\nTugas **{tugas['nama']}** harus segera dikumpulkan!")
-                tugas["notif_2h"] = True
-                save_data(db)
 
     for jadwal in db.get("jadwal", []):
         if jadwal.get("tanggal") == now.strftime("%Y-%m-%d"):
@@ -196,7 +182,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg_lower = user_message.lower()
     logging.info(f"Pesan diterima: {user_message}")
 
-    # 1. CEK JADWAL BERDASARKAN HARI (Senin - Minggu) SECARA LOKAL
+    # 1. DETEKSI NIAT TAMBAH JADWAL SECARA NATURAL
+    if any(k in msg_lower for k in ["tambahin", "tambah", "buatkan jadwal", "ada jadwal baru", "tambah jadwal"]):
+        nama, tgl, wkt = parse_natural_add(user_message)
+        res = tambah_jadwal_lokal(nama, tgl, wkt)
+        await update.message.reply_text(res)
+        return
+
+    # 2. DETEKSI NIAT HAPUS JADWAL SECARA NATURAL
+    if any(k in msg_lower for k in ["hapus", "batalkan", "buang jadwal"]):
+        res = hapus_jadwal_lokal(user_message)
+        await update.message.reply_text(res)
+        return
+
+    # 3. CEK JADWAL BERDASARKAN HARI (Senin - Minggu)
     day_map = {
         "senin": 0, "selasa": 1, "rabu": 2, "kamis": 3, 
         "jumat": 4, "sabtu": 5, "minggu": 6
@@ -210,7 +209,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             day_str_target = day_name.capitalize()
             break
 
-    if target_weekday is not None and not any(k in msg_lower for k in ["tambah", "buat", "hapus"]):
+    if target_weekday is not None:
         now = datetime.now()
         filtered = []
         for j in db.get("jadwal", []):
@@ -225,14 +224,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         
         resp = f"📅 **Jadwal Hari {day_str_target} (Mendatang):**\n"
         if filtered:
-            for j in filtered[:12]:
+            for j in filtered[:15]:
                 resp += f"- **{j.get('tanggal')}** | {j['nama']} ({j.get('waktu', '-')})\n"
         else:
             resp += f"Nggak ada jadwal tercatat buat hari {day_str_target} ke depan. Santai!"
         await update.message.reply_text(resp)
         return
 
-    # 2. CEK JADWAL SEMINGGU / HARI INI / BESOK
+    # 4. CEK JADWAL SEMINGGU / HARI INI / BESOK
     if any(k in msg_lower for k in ["seminggu", "7 hari", "minggu ini", "1 minggu"]):
         now = datetime.now()
         end_date = now + timedelta(days=7)
@@ -269,24 +268,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(resp)
         return
 
-    # 3. CHAT UMUM / TAMBAH & HAPUS JADWAL VIA GEMINI
-    if not model:
-        await update.message.reply_text("Duh, API Key Gemini belum dipasang.")
-        return
-
-    try:
-        prompt = f"User bilang: {user_message}. Tanggal hari ini: {datetime.now().strftime('%Y-%m-%d')}."
-        chat_session = model.start_chat(enable_automatic_function_calling=True)
-        response = chat_session.send_message(prompt)
-        
-        await update.message.reply_text(response.text)
-    except Exception as e:
-        logging.error(f"Error Gemini API: {e}")
-        await update.message.reply_text(
-            "🤖 Otak AI-ku lagi istirahat sebentar karena limit gratis harian, "
-            "tapi **database jadwal, tugas, dan cek hari (senin-minggu) kamu tetep jalan normal!** "
-            "Coba ketik nama hari (misal: 'rabu') buat lihat jadwal."
-        )
+    # 5. OBROLAN UMUM / FALLBACK SANTAI (Bebas Limit 429)
+    await update.message.reply_text(
+        "🤖 Halo Ikrimah! Ketik nama hari (misal: `rabu`, `kamis`) buat lihat jadwal, "
+        "atau langsung ngobrol santai buat nambah/hapus jadwal (contoh: *'tambahin rapat besok jam 2 siang'*)."
+    )
 
 def main():
     global telegram_app
@@ -309,7 +295,7 @@ def main():
     
     application.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
 
-    logging.info("Izumi Academic Bot (Chat Santai Ultimate) berjalan...")
+    logging.info("Izumi Academic Bot (Full Natural Chat) berjalan...")
     application.run_polling()
 
 if __name__ == '__main__':
